@@ -46,6 +46,12 @@ import {
 import { startTray, stopTray, type TrayOptions } from "./utils/tray.js";
 import { checkFailsafe, FailsafeError } from "./utils/failsafe.js";
 import { wrapHandlerArg } from "./utils/failsafe-wrap.js";
+import {
+  logDiagnostic,
+  normalizeThrown,
+  wrapHandlerArgWithTiming,
+} from "./engine/diagnostic-log.js";
+import { startCpuWatchdog } from "./engine/diagnostic-watchdog.js";
 import { SERVER_VERSION } from "./version.js";
 import { resolveV2Activation } from "./tools/desktop-activation.js";
 import { uiPatternStore } from "./store/ui-pattern-store.js";
@@ -177,18 +183,26 @@ function createMcpServer(): McpServer {
   // dispatchers (keyboard / clipboard / window_dock / scroll / terminal /
   // browser_eval) registered via registerTool — the same emergency-stop gate
   // as the legacy s.tool() registrations. (Codex PR #40 P1)
+  // Wrap order: failsafe pre-check first, then slow-tool timing. Outer wrappers
+  // run first, so wrapping with timing after failsafe means timing observes
+  // total elapsed time including the failsafe check (negligible for normal
+  // operation; informative when failsafe itself stalls).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const _originalTool = s.tool.bind(s) as (...args: any[]) => any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (s as any).tool = function (...toolArgs: any[]) {
-    return _originalTool(...wrapHandlerArg(toolArgs, checkFailsafe));
+    return _originalTool(
+      ...wrapHandlerArgWithTiming(wrapHandlerArg(toolArgs, checkFailsafe)),
+    );
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const _originalRegisterTool = s.registerTool.bind(s) as (...args: any[]) => any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (s as any).registerTool = function (...toolArgs: any[]) {
-    return _originalRegisterTool(...wrapHandlerArg(toolArgs, checkFailsafe));
+    return _originalRegisterTool(
+      ...wrapHandlerArgWithTiming(wrapHandlerArg(toolArgs, checkFailsafe)),
+    );
   };
 
   registerScreenshotTools(s);
@@ -266,6 +280,13 @@ const failsafeTimer = setInterval(async () => {
   } catch (err) {
     if (err instanceof FailsafeError) {
       console.error("[desktop-touch] FAILSAFE triggered: mouse at top-left corner. Exiting.");
+      logDiagnostic({
+        kind: "exit",
+        trigger: "failsafe",
+        exitCode: 1,
+        inflight: inflightIds.size,
+        shutdownPending,
+      });
       stopTray();
       process.exit(1);
     }
@@ -289,7 +310,7 @@ let shutdownPending = false;
 let shutdownTimer: NodeJS.Timeout | null = null;
 const SHUTDOWN_GRACE_MS = 60_000;
 
-function shutdown(): void {
+function shutdown(exitCode = 0): void {
   if (shuttingDown) return;
   shuttingDown = true;
   clearShutdownPending();
@@ -311,6 +332,8 @@ function shutdown(): void {
   // pending あれば disk write 完了後 exit (data loss 防止)。
   // best-effort: error も resolve、即時 exit を遅延させない。
   // 並列 flush で B-3 / B-4 両 store を 1 度に flush。
+  // Issue #365 review R1 P1-1: exitCode は uncaught 経路から 1 を渡す。
+  // Promise.all 経由で flush を待つため、uncaught でも store data loss しない。
   Promise.all([
     uiPatternStore.flushImmediateForShutdown(),
     macroOutcomeStore.flushImmediateForShutdown(),
@@ -318,7 +341,7 @@ function shutdown(): void {
     .catch(() => {})
     .finally(() => {
       // In-flight requests clean up their own server/transport instances via res.on("close").
-      process.exit(0);
+      process.exit(exitCode);
     });
 }
 
@@ -328,6 +351,13 @@ function requestShutdown(reason: string): void {
   if (shuttingDown || shutdownPending) return;
   if (inflightIds.size === 0) {
     console.error(`[desktop-touch] ${reason} — shutting down.`);
+    logDiagnostic({
+      kind: "exit",
+      trigger: reason,
+      exitCode: 0,
+      inflight: 0,
+      shutdownPending: false,
+    });
     shutdown();
     return;
   }
@@ -344,6 +374,13 @@ function requestShutdown(reason: string): void {
     console.error(
       `[desktop-touch] in-flight requests still pending after ${SHUTDOWN_GRACE_MS}ms — forcing shutdown.`
     );
+    logDiagnostic({
+      kind: "exit",
+      trigger: `${reason} (grace expired)`,
+      exitCode: 0,
+      inflight: inflightIds.size,
+      shutdownPending: true,
+    });
     shutdown();
   }, SHUTDOWN_GRACE_MS);
 }
@@ -356,14 +393,92 @@ function maybeFinishShutdown(): void {
     setImmediate(() => {
       if (shuttingDown) return;
       console.error("[desktop-touch] in-flight requests drained — shutting down.");
+      logDiagnostic({
+        kind: "exit",
+        trigger: "inflight drained after grace",
+        exitCode: 0,
+        inflight: 0,
+        shutdownPending: true,
+      });
       shutdown();
     });
   }
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
-process.on("disconnect", shutdown);
+function shutdownFromSignal(trigger: string): void {
+  if (!shuttingDown) {
+    logDiagnostic({
+      kind: "exit",
+      trigger,
+      exitCode: 0,
+      inflight: inflightIds.size,
+      shutdownPending,
+    });
+  }
+  shutdown();
+}
+
+process.on("SIGINT", () => shutdownFromSignal("SIGINT"));
+process.on("SIGTERM", () => shutdownFromSignal("SIGTERM"));
+process.on("disconnect", () => shutdownFromSignal("disconnect"));
+
+// Issue #365: uncaught exceptions and unhandled promise rejections terminate
+// the Node process with no Application Event Log crash entry (treated as a
+// normal exit). Without these handlers the only signal was a stderr warning
+// nobody captured. Log + shutdown(1) so post-hoc grep can identify the trigger
+// AND so Phase B B-3/B-4 store flush (uiPatternStore / macroOutcomeStore) is
+// not skipped — calling shutdown() routes through the existing Promise.all
+// flush gate before process.exit. (Review R1 P1-1.)
+function handleUncaught(
+  type: "uncaughtException" | "unhandledRejection",
+  err: Error,
+): void {
+  // Codex R1 P2-1: preserve Node's default crash visibility on stderr in case
+  // the diagnostic log is disabled / unwritable / the user only has stderr
+  // capture configured. Best-effort; a stderr write that fails must not
+  // re-enter the handler.
+  try {
+    console.error(`[desktop-touch] ${type}:`, err.stack ?? err.message ?? String(err));
+  } catch {
+    // ignore
+  }
+  // shutdown() guards re-entry internally via the `shuttingDown` flag, so we
+  // can safely call it from here even if a previous handler already invoked it.
+  logDiagnostic({
+    kind: "uncaught",
+    type,
+    name: err.name,
+    msg: err.message,
+    stack: err.stack,
+  });
+  logDiagnostic({
+    kind: "exit",
+    trigger: type,
+    exitCode: 1,
+    inflight: inflightIds.size,
+    shutdownPending,
+  });
+  shutdown(1);
+}
+
+process.on("uncaughtException", (value: unknown) => {
+  handleUncaught("uncaughtException", normalizeThrown(value));
+});
+process.on("unhandledRejection", (reason: unknown) => {
+  handleUncaught("unhandledRejection", normalizeThrown(reason));
+});
+
+// Start the passive self-CPU watchdog. Returns null when disabled via env;
+// the assignment keeps the handle so test harnesses can stop it. Handle is
+// otherwise unused — the watchdog's setInterval is unref'd so it does not
+// keep the event loop alive.
+// Review R1 P2-4: skip when --help is requested so the help path doesn't
+// allocate a setInterval / create the logs directory for a one-shot CLI use.
+const _cpuWatchdog =
+  process.argv.includes("--help") || process.argv.includes("-h")
+    ? null
+    : startCpuWatchdog();
+void _cpuWatchdog;
 
 // ─── Parse CLI flags ──────────────────────────────────────────────────────────
 const args = process.argv.slice(2);

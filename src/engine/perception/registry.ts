@@ -73,6 +73,7 @@ import { ReconciliationScheduler } from "./reconciliation.js";
 import { buildRefreshPlan } from "./refresh-plan.js";
 import { WinEventSource } from "../winevent-source.js";
 import type { WinEventSourceDiagnostics } from "../winevent-source.js";
+import { logDiagnostic } from "../diagnostic-log.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -371,6 +372,18 @@ export function stopNativeRuntime(): void {
   _rawQueue     = null;
 }
 
+// Issue #365: log drains that exceed this threshold so we can correlate the
+// "fan kicked in" symptom with native event volume. 100 events / 50ms cycle =
+// 2000 events/s sustained — well above quiescent baseline.
+// Review R1 P3-1: env override so a noisy desktop environment with a higher
+// baseline can raise the threshold without recompiling.
+const DRAIN_OVERSIZE_THRESHOLD: number = (() => {
+  const raw = process.env.DESKTOP_TOUCH_DRAIN_OVERSIZE_THRESHOLD;
+  if (raw === undefined) return 100;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 100;
+})();
+
 function drainNativeEventQueue(): void {
   if (!_rawQueue || !_nativeBridge) return;
   // Read overflow flag BEFORE drain — drain() resets overflowPending to false,
@@ -383,6 +396,13 @@ function drainNativeEventQueue(): void {
   if (overflowWasPending) {
     _nativeBridge.processOverflow(performance.now());
     _reconciler?.triggerImmediate();
+  }
+  if (batch.length >= DRAIN_OVERSIZE_THRESHOLD || overflowWasPending) {
+    logDiagnostic({
+      kind: "drain_oversize",
+      batch_size: batch.length,
+      overflow: overflowWasPending,
+    });
   }
 }
 
