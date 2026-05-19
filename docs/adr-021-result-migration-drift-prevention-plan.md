@@ -194,7 +194,7 @@ ADR-020 SR-2 sub-plan §9 OQ-SR2-5 で定義済の **case 2** を選択。
 
 5. **PR-P2-4** (`failWith` 互換 wrapper 削除 + `ToolFailure` 型 alias 化、Round 3 P2-3 反映で 2 step 明示分割):
    - **Step 1**: `failWith` 0 callsite 確認 (`grep -r "failWith\b" src/`)、`src/tools/_errors.ts:685-719` から `failWith` 定義削除、`_errors.ts:14-15` の `ROOT_HOISTED_KEYS` は `_post.ts` 経路として保持
-   - **Step 2** (Round 3 P2-3 新規明示): `src/tools/_types.ts` 上の `ToolFailure` 型 (現状 `_errors.ts:1` で import 元) を `Result<never, ToolFailureError>` の type alias に簡約。**事前 reach 調査**: PR-P2-3d land 後の acceptance gate に「`grep -r "ToolFailure\b" src/ tests/` で external consumer リスト化 + type 互換性確認」を追加、内部 type 名で外部 LLM client が分離されていることを実証 (Round 3 P2-3 反映)
+   - **Step 2** (Round 3 P2-3 新規明示、Round 3 Codex P2 反映で error payload alias に修正): `src/tools/_types.ts` 上の `ToolFailure` 型 (現状 `_errors.ts:1` で import 元) を **`ToolFailureError` payload type の alias** に簡約 (`type ToolFailure = ToolFailureError`、または既存 `ToolFailure` structural shape を keep して `ToolFailureError implements ToolFailure` で命名整合)。**`Result<never, ...>` の Result wrapper には alias しない** (Phase 5 で `Promise<Result<ToolSuccess<T>, ToolFailure>>` を採るとき nested Result `Result<ToolSuccess, Result<never, ToolFailureError>>` になり single success/failure boundary が崩れるため、Round 3 Codex review §line 197 で指摘済)。**事前 reach 調査**: PR-P2-3d land 後の acceptance gate に「`grep -r "ToolFailure\b" src/ tests/` で external consumer リスト化 + type 互換性確認」を追加、内部 type 名で外部 LLM client が分離されていることを実証 (Round 3 P2-3 反映)
 
 #### 3.3.3 Phase 2 acceptance (Round 3 改訂)
 
@@ -327,7 +327,7 @@ Phase 5 は本 ADR-021 の Phase 1-4 完了後に **別 ADR (e.g. ADR-022)** ま
 
 (Round 1 から継続)
 
-**(a) 完全削除** (`failWith` 0 callsite、`ToolFailure` shape は `Result<...>` の type alias に簡約)
+**(a) 完全削除** (`failWith` 0 callsite、`ToolFailure` shape は `ToolFailureError` payload type の alias に簡約 — Phase 5 で `Result<ToolSuccess, ToolFailure>` を採るため、`Result<never, ...>` wrapper への alias は nested Result になるので不可、PR-P2-4 Step 2 参照)
 **(b) 互換層として keep**、`failWith` 経由 callsite は新規追加禁止 (lint rule)、既存 176 件はそのまま動く wrapper として永続化
 **(c) hybrid**: 一部の handler-internal callsite (e.g. `_post.ts` 内部) は `failWith` keep、外部 callsite は Result migrate
 
@@ -421,6 +421,7 @@ Phase 5 は本 ADR-021 の Phase 1-4 完了後に **別 ADR (e.g. ADR-022)** ま
   - **§3.6** Phase 5 (carry-over) scope outline を新設 (自己 review P2-6)
   - **§0** Round 0 削除の memory 参照を明示 (自己 review P3-1)
   - **§3.2 PR-P1-1** 新規 file `-shape-snapshot.test.ts` 独立新設を明示 (自己 review P3-2)
+- **Round 3 post-PR fix** (2026-05-19、Codex auto-review P2 反映): PR-P2-4 Step 2 + OQ-1(a) の `ToolFailure` alias target を `Result<never, ToolFailureError>` から **`ToolFailureError` payload type** に修正。Phase 5 で `Result<ToolSuccess, ToolFailure>` signature を採るとき nested Result 化を回避、single success/failure boundary を保持
 - **Round 4 trigger**: OQ-1〜OQ-7 への user feedback で着手判断確定後、本 doc 改稿または Phase 1 PR 着手
 
 ### Round 1 → Round 2 → Round 3 で却下された / 弱められた強い言い切り
