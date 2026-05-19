@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-05-19 — `desktop_act` race-free verification + first-class `keyboard` executor + ADR-020 SR-4 DXGI broker
+
 ### Improved
 
 - **`desktop_act` visual-change verification is now race-free when other
