@@ -372,6 +372,161 @@ export function stopNativeRuntime(): void {
   _rawQueue     = null;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Issue #365 Phase 3 — Idle-aware perception dormancy
+//
+// When no JSON-RPC has arrived for N ms AND no tool call is in-flight, stop
+// the WinEvent sidecar + drain timer + reconciler so they don't burn CPU
+// while the LLM is silent. The lens registry is preserved; on the next RPC
+// the wake hook re-spawns the runtime so subsequent tool calls observe a
+// fresh state.
+//
+// Trigger source of truth lives in `process-health.ts` (lastRpcReceivedAt /
+// inflight count). The dormancy watcher polls those getters on a 10s cadence
+// (unref'd) — the watcher itself stays unaffected by dormancy because its
+// only work is reading two integers and comparing.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DORMANCY_DEFAULT_IDLE_MS = 60_000;
+const DORMANCY_CHECK_INTERVAL_MS = 10_000;
+
+function readDormancyIdleMs(): number {
+  const raw = process.env.DESKTOP_TOUCH_PERCEPTION_IDLE_MS;
+  if (raw === undefined) return DORMANCY_DEFAULT_IDLE_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DORMANCY_DEFAULT_IDLE_MS;
+}
+
+function dormancyDisabled(): boolean {
+  return process.env.DESKTOP_TOUCH_PERCEPTION_DORMANCY_DISABLE === "1";
+}
+
+let _dormant = false;
+let _dormancyTimer: NodeJS.Timeout | null = null;
+
+/**
+ * Is the native runtime currently sleeping due to idle dormancy?
+ * Distinct from "not yet started" / "stopped by other path" — `_dormant` is
+ * only true when the dormancy watcher stopped it for being idle.
+ */
+export function isPerceptionDormant(): boolean {
+  return _dormant;
+}
+
+function checkDormancy(
+  getLastRpcMs: () => number | null,
+  getInflight: () => number,
+  idleMs: number,
+): void {
+  if (_dormant) return;
+  // If runtime is not running at all there is nothing to put to sleep.
+  if (!_winEventSource) return;
+  // No RPC has ever arrived: stay running so the first arrival is fast.
+  const lastRpc = getLastRpcMs();
+  if (lastRpc === null) return;
+  // Active work in flight — never sleep underneath an in-flight tool.
+  const inflight = getInflight();
+  if (inflight > 0) return;
+  const elapsed = Date.now() - lastRpc;
+  if (elapsed < idleMs) return;
+
+  console.error(
+    `[desktop-touch] perception idle for ${elapsed}ms — entering dormancy`,
+  );
+  _dormant = true;
+  stopNativeRuntime();
+  // Review R1 P3-2: read inflight via getter rather than hardcoding 0, so the
+  // log remains accurate if a future refactor changes the early-return ordering.
+  logDiagnostic({
+    kind: "dormancy_transition",
+    state: "enter",
+    idle_ms: elapsed,
+    inflight,
+  });
+}
+
+/**
+ * Start the dormancy watcher. The getters are passed in so this module does
+ * not import process-health.ts (avoids a cycle: process-health is consumed
+ * by server-windows.ts which already imports registry.ts via the lifecycle
+ * paths).
+ *
+ * Returns a handle whose `stop()` clears the interval. Returns `null` when
+ * dormancy is disabled via env (caller can ignore safely).
+ */
+export function startPerceptionDormancyWatcher(
+  getLastRpcMs: () => number | null,
+  getInflight: () => number,
+): { stop: () => void } | null {
+  if (dormancyDisabled()) return null;
+  if (_dormancyTimer) return null;
+  const idleMs = readDormancyIdleMs();
+  _dormancyTimer = setInterval(
+    () => checkDormancy(getLastRpcMs, getInflight, idleMs),
+    DORMANCY_CHECK_INTERVAL_MS,
+  );
+  if (_dormancyTimer.unref) _dormancyTimer.unref();
+  return {
+    stop(): void {
+      if (_dormancyTimer) {
+        clearInterval(_dormancyTimer);
+        _dormancyTimer = null;
+      }
+    },
+  };
+}
+
+/**
+ * Wake the perception runtime if it is dormant. Called from `server-windows.ts`
+ * on every incoming JSON-RPC request (via the transport.onmessage hook) so the
+ * next tool call observes a freshly-started sidecar + drain loop.
+ *
+ * No-op when not dormant or when no window lens exists (ensureNativeEventRuntime
+ * guards that case already). Idempotent.
+ *
+ * **Stale view caveat (Phase 3 plan §3.1 Risks / Review R1 P2-3)**: between
+ * `enterDormancy()` (sidecar stopped) and the first tool call that triggers
+ * `wakePerceptionRuntime()` here, any cached perception view —
+ * `current_focused_element`, `latest_focus`, dirty rect aggregates — keeps the
+ * value from the last received event before sleep. The first tool call
+ * post-wake will observe **values up to `DESKTOP_TOUCH_PERCEPTION_IDLE_MS` old**.
+ * Subsequent calls see fresh data once the sidecar republishes events.
+ *
+ * Tools sensitive to that staleness (focus-dependent guards) currently mask the
+ * issue because they re-query UIA directly on the synchronous path; the view
+ * stays as a fast hint, not the source of truth. If a future tool starts
+ * relying solely on view freshness, it needs an explicit "post-wake refresh"
+ * step or this function needs to invalidate the cache before returning.
+ */
+export function wakePerceptionRuntime(): void {
+  if (!_dormant) return;
+  const start = Date.now();
+  _dormant = false;
+  ensureNativeEventRuntime();
+  logDiagnostic({
+    kind: "dormancy_transition",
+    state: "exit",
+    elapsed_ms: Date.now() - start,
+    // inflight at this point is typically ≥ 1 (the wake is triggered by an
+    // incoming request whose id has not yet been added to inflightIds in
+    // server-windows.ts — that happens immediately after this call). We
+    // record 0 deliberately because `setInflightCount` has not run yet; the
+    // accurate "current in-flight at wake time" value is best read from the
+    // subsequent `slow_tool` / `exit` events that share the same uptime_ms
+    // window.
+    inflight: 0,
+  });
+}
+
+/** Test-only: reset dormancy state. Not exposed via the public index. */
+export function _resetDormancyForTest(): void {
+  if (_dormancyTimer) {
+    clearInterval(_dormancyTimer);
+    _dormancyTimer = null;
+  }
+  _dormant = false;
+}
+
 // Issue #365: log drains that exceed this threshold so we can correlate the
 // "fan kicked in" symptom with native event volume. 100 events / 50ms cycle =
 // 2000 events/s sustained — well above quiescent baseline.
