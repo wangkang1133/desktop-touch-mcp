@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { ok, buildDesc } from "./_types.js";
 import type { ToolResult } from "./_types.js";
 import { failWith, failCode } from "./_errors.js";
@@ -368,6 +368,225 @@ export function scanRegionAfterEcho(
   const idx = postBaseline.indexOf(needle);
   if (idx < 0) return undefined; // defer: echo not yet located
   return postBaseline.slice(idx + needle.length);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// issue #386: echo-immune completion sentinel (until:{mode:'exit'})
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// #383 anchored single-line `until:{mode:'pattern'}` past the echoed command;
+// multiline echo boundaries are undeterminable from the buffer alone (#386), so
+// they were left to a best-effort full scan. The structural fix is to stop
+// trying to locate the echo and instead match a token the DRIVER controls whose
+// ECHO form differs from its OUTPUT form — echo-immune by construction for both
+// single-line AND multiline.
+//
+// The assembled token is `__DTMCP_EXIT_<nonce>`. The shell epilogue prints it
+// via a SPLIT expression (`'__DTMCP' "_EXIT_<nonce>"` / `('__DTMCP'+"_EXIT_…")`)
+// so the echoed command line never contains the CONTIGUOUS token — only the
+// command's runtime OUTPUT does. Matching `<token>|<exitcode>` therefore never
+// self-matches the echo, with no echo-boundary detection at all.
+//
+// These are pure helpers (testable without a real terminal); the run handler
+// wires them in P2. cmd.exe is deferred (it needs delayed expansion via
+// `cmd /v:on`/`!ERRORLEVEL!`, a separate invocation path) — only bash and
+// PowerShell are first-class here.
+
+/** Shells with a first-class echo-immune exit-mode epilogue. cmd is deferred. */
+export type ExitShell = "bash" | "powershell";
+
+const EXIT_TOKEN_HEAD = "__DTMCP";
+const EXIT_TOKEN_TAIL_PREFIX = "_EXIT_";
+
+/** Assembled contiguous token that appears ONLY in real output, never the echo. */
+function exitToken(nonce: string): string {
+  return EXIT_TOKEN_HEAD + EXIT_TOKEN_TAIL_PREFIX + nonce;
+}
+
+/** Per-invocation random nonce (24 hex chars). Never appears literally in the
+ *  echoed command, so a crypto-random value makes accidental output collision
+ *  effectively impossible. */
+export function generateExitNonce(): string {
+  return randomBytes(12).toString("hex");
+}
+
+/**
+ * Build the full command string to SEND for exit mode: optional prologue +
+ * the user `input` + an echo-immune completion epilogue.
+ *
+ * Echo-immunity: the epilogue emits the token via a split expression, so the
+ * sent (and therefore echoed) text contains `'__DTMCP' "_EXIT_<nonce>"` (bash)
+ * or `('__DTMCP'+"_EXIT_<nonce>")` (PowerShell) — never the contiguous
+ * `__DTMCP_EXIT_<nonce>`. Only the runtime OUTPUT assembles the contiguous token.
+ *
+ * Exit code (captured BEFORE the print to avoid masking, §4):
+ *   - bash: `$?` → `<token>|<rc>|` (trailing `|` terminates the code field).
+ *   - PowerShell: a `$global:LASTEXITCODE = $null` PROLOGUE clears any stale
+ *     value from a previous native command, then the epilogue emits BOTH
+ *     `$LASTEXITCODE` (native exe; empty when no native ran) and `$?` (cmdlet
+ *     boolean) → `<token>|<code-or-empty>|<True|False>`. parseExitSentinel
+ *     trusts the numeric code only when present, else maps `$?` (OQ-7).
+ *
+ * Callers MUST reject unsafe input first (see isUnsafeForExitMode): appending an
+ * epilogue after an unterminated quote / here-doc / line continuation would be
+ * swallowed by the open construct instead of executing.
+ */
+export function buildExitCommand(input: string, shell: ExitShell, nonce: string): string {
+  const head = EXIT_TOKEN_HEAD;
+  const tail = EXIT_TOKEN_TAIL_PREFIX + nonce;
+  if (shell === "bash") {
+    // printf args: '%s%s|%d|\n' then '__DTMCP', "_EXIT_<nonce>", "$rc" (three).
+    // The TRAILING `|` is a terminator: parseExitSentinel requires it so a
+    // multi-digit code (e.g. 127) cannot match mid-render as `1` (Codex P2).
+    return `${input}\n__dtmcp_rc=$?; printf '%s%s|%d|\\n' '${head}' "${tail}" "$__dtmcp_rc"`;
+  }
+  // powershell
+  return (
+    `$global:LASTEXITCODE = $null\n${input}\n` +
+    `$dtmcp_ok=$?; $dtmcp_c=$LASTEXITCODE; ('${head}'+"${tail}")+'|'+([string]$dtmcp_c)+'|'+$dtmcp_ok`
+  );
+}
+
+/**
+ * Parse the echo-immune sentinel out of the post-baseline slice. Returns
+ * matched=false (DEFER) until the COMPLETE sentinel line (token + separator +
+ * exit-code field) has rendered — partial renders never match, and the echo
+ * never contains the contiguous `<token>|<code>` form, so this is echo-immune.
+ *
+ * Both shells use a TRAILING terminator after the exit-code field so a partially
+ * rendered multi-digit code never matches early (Codex P2): bash closes with a
+ * second `|`, PowerShell with the `|<True|False>` field.
+ *
+ * Exit-code normalisation:
+ *   - bash: `<token>|<digits>|` → that integer (`$?` is 0-255, unsigned).
+ *   - PowerShell: `<token>|<code-or-empty>|<True|False>` → the numeric code when
+ *     a native exe ran (non-empty; MAY be negative — `$LASTEXITCODE` is an Int32
+ *     and Windows status codes use the high bit, Codex round 3), else `$?` mapped
+ *     True→0 / False→1 (OQ-7).
+ */
+export function parseExitSentinel(
+  slice: string,
+  nonce: string,
+  shell: ExitShell,
+): { matched: boolean; exitCode?: number } {
+  const tk = exitToken(nonce).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (shell === "bash") {
+    // Require the closing `|` so `127` cannot match as `1` before fully painted.
+    const m = new RegExp(tk + "\\|(\\d+)\\|").exec(slice);
+    if (!m) return { matched: false };
+    return { matched: true, exitCode: parseInt(m[1], 10) };
+  }
+  // powershell — code field may be empty (cmdlet path) or a SIGNED Int32.
+  const m = new RegExp(tk + "\\|((?:-?\\d+)?)\\|(True|False)").exec(slice);
+  if (!m) return { matched: false };
+  if (m[1].length > 0) return { matched: true, exitCode: parseInt(m[1], 10) };
+  return { matched: true, exitCode: m[2] === "True" ? 0 : 1 };
+}
+
+/**
+ * Map a window process name to an exit-mode shell with a CONFIDENCE level.
+ *
+ * high  — the process IS the shell (`pwsh`/`powershell`/`bash`/`wsl`, or `cmd`).
+ * low   — a host that can run ANY shell and hides the real one: WindowsTerminal,
+ *         conhost (classic PowerShell often surfaces as conhost too — auto is
+ *         frequently low even for a local PowerShell), OpenSSH/ssh (the remote
+ *         shell is invisible from the local process — the SSH/WSL-nesting wall).
+ *
+ * The run handler treats low confidence as a loud failure (ExitModeShellAmbiguous)
+ * and asks the caller to pass `shell` explicitly, rather than guessing wrong and
+ * sending a broken epilogue. `shell` here may be `cmd` (high) — the handler still
+ * rejects it (ExitModeShellUnsupported) because cmd is deferred; detection and
+ * support are separate concerns.
+ */
+export function detectShell(
+  processName: string | null | undefined,
+): { shell: ExitShell | "cmd" | "unknown"; confidence: "high" | "low" } {
+  const p = (processName ?? "").toLowerCase().replace(/\.exe$/, "");
+  if (p === "pwsh" || p === "powershell") return { shell: "powershell", confidence: "high" };
+  if (p === "bash" || p === "wsl") return { shell: "bash", confidence: "high" };
+  if (p === "cmd") return { shell: "cmd", confidence: "high" };
+  return { shell: "unknown", confidence: "low" };
+}
+
+/**
+ * Detect input that an appended epilogue would NOT safely follow (an OPEN
+ * construct keeps parsing into the epilogue instead of running it). Exit mode
+ * rejects these fast with a clear reason (ExitModeUnsafeInput) instead of letting
+ * the run sit until timeout.
+ *
+ * Best-effort fast-fail, NOT a correctness boundary: shell syntax is unbounded,
+ * so an exotic missed construct does not corrupt data — it degrades to a loud
+ * `completion.reason:"timeout"` (the open construct swallows the epilogue, the
+ * sentinel never renders, the run times out and reports it). This guard turns the
+ * common cases (heredoc / `$(…)` / quotes / continuation) into an instant,
+ * actionable reject. Conservative (bash-leaning): a false positive only routes
+ * the caller to pattern/quiet. Returns a short reason slug, or null when safe.
+ */
+export function isUnsafeForExitMode(input: string): string | null {
+  // Trailing line continuation — the epilogue would be read as a continuation of
+  // the user command. Both markers count: bash uses `\`, PowerShell uses a
+  // trailing backtick (Codex P1); a trailing backtick is also an unterminated
+  // bash command substitution. Either way the appended epilogue is swallowed.
+  if (/[\\`][ \t]*$/.test(input)) return "trailing_line_continuation";
+  // Bash here-doc, excluding `<<<` (here-string, single-line and safe). The
+  // delimiter can start with ANY token char, not just letters: `<<EOF`, `<<1`,
+  // `<<-9`, `<<\EOF`, `<<'END'`, `<< EOF` (Codex P1 — a non-letter delimiter
+  // would otherwise pass as safe and the heredoc swallows the epilogue). The
+  // lookbehind/lookahead exclude `<<<` precisely; a `<<` followed by a delimiter
+  // token is treated as a heredoc (arithmetic `<<` is conservatively flagged too
+  // — a false positive only routes to pattern/quiet).
+  if (/(?<!<)<<(?!<)[-~]?[ \t]*[A-Za-z0-9_'"\\]/.test(input)) return "heredoc";
+  // PowerShell here-string openers `@"` / `@'` (multi-line literal).
+  if (/@["']/.test(input)) return "powershell_herestring";
+  // Unbalanced quotes / unterminated `$(…)` — track context so an apostrophe
+  // inside "double quotes" (e.g. `echo "it's fine"`) does NOT false-trip, and a
+  // `$(`/quote inside single quotes is literal.
+  return unterminatedShellConstruct(input);
+}
+
+/**
+ * Stack-based bash scanner for constructs left OPEN at the end of `input` —
+ * appending an epilogue inside any of them makes the shell keep parsing into it
+ * instead of running the sentinel (→ exit-mode timeout). A STACK (not flat
+ * counters) is required because double-quoted strings and `$( … )` command
+ * substitutions nest recursively: a string can hold a substitution and a
+ * substitution can hold a string. With a stack, a `)` that appears only inside a
+ * `"…"` string (e.g. `echo $(")"`) does NOT wrongly close an outer `$(` (Codex
+ * round 3) — it is literal until the string's matching context is on top.
+ *
+ * Single quotes are literal spans (nothing nests inside). Backslash escapes the
+ * next char outside single quotes. Backtick command substitution is intentionally
+ * NOT tracked (PowerShell uses backtick as a string escape, e.g. "`n", so
+ * counting it would false-reject valid PowerShell); a TRAILING backtick is still
+ * caught by the continuation check above.
+ */
+function unterminatedShellConstruct(input: string): string | null {
+  let inSingle = false;
+  const stack: ("dquote" | "cmdsubst")[] = [];
+  const top = () => stack[stack.length - 1];
+  for (let i = 0; i < input.length; i++) {
+    const c = input[i];
+    if (inSingle) {
+      if (c === "'") inSingle = false; // only `'` ends a single-quoted span
+      continue;
+    }
+    if (c === "\\") { i++; continue; } // escape next char (outside single quotes)
+    if (c === "'" && top() !== "dquote") { inSingle = true; continue; }
+    if (c === '"') {
+      if (top() === "dquote") stack.pop(); // close the string
+      else stack.push("dquote");           // open a string (valid inside $( … ) too)
+      continue;
+    }
+    // $( … ) opens a substitution both unquoted and inside a double-quoted string.
+    if (c === "$" && input[i + 1] === "(") { stack.push("cmdsubst"); i++; continue; }
+    // `)` closes a substitution ONLY when one is the innermost open context — a
+    // `)` inside a "…" string (top === "dquote") is literal.
+    if (c === ")" && top() === "cmdsubst") { stack.pop(); continue; }
+  }
+  if (inSingle) return "unbalanced_quotes";
+  if (stack.includes("cmdsubst")) return "unterminated_command_substitution";
+  if (stack.length > 0) return "unbalanced_quotes"; // an open "…" string
+  return null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1022,6 +1241,9 @@ export const terminalSendHandler = async ({
 type CompletionReason =
   | "quiet"
   | "pattern_matched"
+  | "exited"           // issue #386: until:{mode:'exit'} — the echo-immune
+                       // completion sentinel rendered (command finished). Only
+                       // exit mode sets this; carries completion.exitCode.
   | "timeout"
   | "window_closed"
   | "window_not_found"
@@ -1042,6 +1264,9 @@ interface TerminalRunResponse {
     reason: CompletionReason;
     elapsedMs: number;
     matchedPattern?: string;
+    // issue #386: process exit code, populated ONLY by until:{mode:'exit'} (the
+    // echo-immune completion sentinel carries it). Other modes omit it.
+    exitCode?: number;
   };
   marker?: string;
   readError?: ReadFailurePayload;
