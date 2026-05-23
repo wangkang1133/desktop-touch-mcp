@@ -1297,7 +1297,11 @@ export function maybeBrowserEvalTimeoutFailure(
   port: number,
 ): ToolResult | null {
   const msg = err instanceof Error ? err.message : String(err);
-  if (!msg.includes("CDP timeout")) return null;
+  // Match the bridge's exact "CDP timeout:" prefix (cdp-bridge.ts session.send).
+  // A page-script error is wrapped as "JS exception in tab: ..." (cdp-bridge.ts),
+  // so a user expression that merely mentions "CDP timeout" is NOT mislabeled
+  // (Codex Round 2 P3 — prefix match, not substring).
+  if (!msg.startsWith("CDP timeout:")) return null;
   return failCode(
     "BrowserEvalTimeout",
     `browser_eval hit the CDP per-command timeout (~${Math.round(CMD_TIMEOUT_MS / 1000)}s). ` +

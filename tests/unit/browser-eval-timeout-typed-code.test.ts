@@ -56,4 +56,14 @@ describe("ADR-023 Phase 0: browser_eval CDP timeout → typed BrowserEvalTimeout
     ).toBeNull();
     expect(maybeBrowserEvalTimeoutFailure("some non-Error string", "t", 9222)).toBeNull();
   });
+
+  it("does NOT mislabel a page-script error that merely mentions 'CDP timeout' (Codex R2 P3)", () => {
+    // A user expression throwing this surfaces wrapped as "JS exception in tab: ..."
+    // (cdp-bridge.ts) — it must not be remapped to BrowserEvalTimeout. The prefix
+    // match (startsWith "CDP timeout:") is what distinguishes the real bridge timeout.
+    expect(
+      maybeBrowserEvalTimeoutFailure(new Error('JS exception in tab: Error: CDP timeout in my code'), "t", 9222),
+    ).toBeNull();
+    expect(maybeBrowserEvalTimeoutFailure(new Error("CDP timeout happened (no colon)"), "t", 9222)).toBeNull();
+  });
 });
