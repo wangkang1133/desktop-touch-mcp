@@ -12,7 +12,10 @@
 import WebSocket from "ws";
 
 export const DEFAULT_CDP_PORT = 9222;
-const CMD_TIMEOUT_MS = 15_000;
+// Exported so callers that surface a CDP-timeout-derived hint (e.g.
+// browser_eval's BrowserEvalTimeout) can build the user-facing seconds value
+// from this single source instead of hardcoding "15s" (ADR-023 Phase 0 review P2-2).
+export const CMD_TIMEOUT_MS = 15_000;
 const CONNECT_TIMEOUT_MS = 5_000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
