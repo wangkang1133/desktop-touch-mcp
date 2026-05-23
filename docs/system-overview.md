@@ -11,8 +11,8 @@ MCP (Model Context Protocol) server that lets Claude CLI drive any Windows deskt
 ## Architecture
 
 ```
-Claude CLI
-    │  stdio (MCP protocol)
+MCP client (Claude CLI / Cursor / VS Code / …)
+    │  stdio or Streamable HTTP (MCP protocol)
     ▼
 desktop-touch-mcp (Node.js / TypeScript)
     ├── Layer 0: Rust Native Engine (.node addon — @harusame64/desktop-touch-engine)
@@ -54,7 +54,7 @@ desktop-touch-mcp (Node.js / TypeScript)
     │   ├── event-bus.ts    — Win32 window-state event bus used by perception sensors
     │   ├── identity-tracker.ts — processStartTimeMs-based window identity; detects restarts
     │   ├── poll.ts         — shared pollUntil utility
-    │   └── perception/     — Reactive Perception Graph (v0.11)
+    │   └── perception/     — Reactive Perception Graph (drives the Auto-Perception layer)
     │       ├── types.ts            — pure types: Observation / Fluent / PerceptionLens / GuardResult / PerceptionEnvelope
     │       ├── evidence.ts         — makeEvidence / isStale / confidenceFor (win32=0.98, image=0.60, inferred=0.50)
     │       ├── fluent-store.ts     — FluentStore: TMS-lite reconcile (newer seq wins; higher confidence wins)
@@ -65,7 +65,7 @@ desktop-touch-mcp (Node.js / TypeScript)
     │       ├── sensors-win32.ts    — only impure module; piggybacks event-bus 500 ms tick
     │       └── registry.ts         — central coordinator; max 16 lenses (LRU evict)
     └── Layer 2: 29 public MCP tools (27 stub catalog + 2 dynamic v2)
-        See [CHANGELOG.md](D:/git/desktop-touch-mcp/CHANGELOG.md) Phase 1+2+3+4 sections for the per-phase mapping. ADR-015 v1.5.0 adds the `excel` tool (invariant 6 explicit carve-out, see `docs/layer-constraints.md` §6.3 Note).
+        See the catalogue below and [CHANGELOG.md](../CHANGELOG.md) for per-version history.
 ```
 
 ### Surface status
@@ -73,10 +73,10 @@ desktop-touch-mcp (Node.js / TypeScript)
 - **Current public surface (v1.8.0)**: 29 tools — 27 stub catalog + 2 dynamic v2 (`desktop_discover` / `desktop_act`)
 - **Tool surface reduction (Phase 1–4) — shipped**: naming redesign, family merge dispatchers, browser rearrangement, privatize/absorb. Pre-Phase-1 surface was 65 tools.
 - Phase design references (all Implemented):
-  - [tool-surface-phase1-naming-design.md](D:/git/desktop-touch-mcp/docs/tool-surface-phase1-naming-design.md)
-  - [tool-surface-phase2-family-merge-design.md](D:/git/desktop-touch-mcp/docs/tool-surface-phase2-family-merge-design.md)
-  - [tool-surface-phase3-browser-rearrangement-design.md](D:/git/desktop-touch-mcp/docs/tool-surface-phase3-browser-rearrangement-design.md)
-  - [tool-surface-phase4-privatize-absorb-design.md](D:/git/desktop-touch-mcp/docs/tool-surface-phase4-privatize-absorb-design.md)
+  - [tool-surface-phase1-naming-design.md](./tool-surface-phase1-naming-design.md)
+  - [tool-surface-phase2-family-merge-design.md](./tool-surface-phase2-family-merge-design.md)
+  - [tool-surface-phase3-browser-rearrangement-design.md](./tool-surface-phase3-browser-rearrangement-design.md)
+  - [tool-surface-phase4-privatize-absorb-design.md](./tool-surface-phase4-privatize-absorb-design.md)
 
 ### Rust Native Engine — Data Flow
 
@@ -381,6 +381,9 @@ keyboard(action='press')(keys="alt+f4")
 keyboard(action='press')(keys="ctrl+shift+s")
 ```
 
+#### `keyboard(action='sequence')`
+Runs ordered key steps inside a single keyboard lock — use it for Alt+letter / letter-mnemonic chains (e.g. classic menu navigation) where an intermediate tool call between presses would close the menu. The steps execute atomically so the menu state survives across the chord.
+
 > **⚠️ Input routing gotcha (when `window_dock(action='dock')` is pinned)**
 > `keyboard(action='type')` / `keyboard(action='press')` send to **whichever window is currently focused**. If `window_dock(action='dock')(pin=true)` has pinned the Claude CLI topmost, keystrokes can land on the CLI instead of the target app.
 > Always call `focus_window(title=…)` first, then verify with `screenshot(detail='meta')` that `isActive=true` on the target. Canonical pattern: `focus_window → keyboard(action='press')/type → screenshot(diffMode=true)`.
@@ -529,9 +532,12 @@ Sends a command, waits for it to complete, and reads the output in one call. How
 
 `mode:'exit'` appends a completion marker whose *printed* form differs from its
 *typed* form, so it never matches the echoed command line (even for multi-line
-input). Pass `shell` explicitly (`'bash'` / `'powershell'`); `cmd.exe` is not yet
-supported. Unsafe input (unterminated quote / here-doc / `$(…)` / trailing `\` or
-backtick) is rejected up front rather than hanging.
+input). Pass `shell` explicitly (`'bash'` / `'powershell'`) — `shell:'auto'` reads
+the shell from the window, but it cannot see a shell running *inside* SSH / WSL and
+returns `ExitModeShellAmbiguous` when the process is genuinely unidentifiable (e.g.
+Windows Terminal). `cmd.exe` is not yet supported. Unsafe input (unterminated quote
+/ here-doc / `$(…)` / trailing `\` or backtick) is rejected up front rather than
+hanging.
 
 ```js
 terminal({ action:'run', windowTitle:'pwsh', input:'npm run build',
@@ -789,8 +795,10 @@ still safe.
 > `perception_forget` / `perception_list` tools were privatized in the Phase 1–4
 > consolidation — manual lens registration is no longer needed. The registry, hot
 > target cache, and sensor loop are unchanged; they are now driven automatically.
-> The `perception://lens/{id}/{summary|guards|debug|events}` MCP resources remain
-> available behind `DESKTOP_TOUCH_PERCEPTION_RESOURCES=1` for inspection.
+> The `perception://lens/{id}/...` MCP resources remain available for inspection:
+> the `summary` / `guards` views behind `DESKTOP_TOUCH_PERCEPTION_RESOURCES=1`, and
+> the `debug` / `events` views behind the additional
+> `DESKTOP_TOUCH_PERCEPTION_DEBUG_RESOURCES=1`.
 
 #### Fluents tracked per target
 
@@ -868,7 +876,7 @@ window bounds, not pixel-level occlusion.
 
 **SuggestedFix**: When a guard blocks with `unsafe_coordinates` / `identity_changed`, the response may carry a one-shot `suggestedFix.fixId` (expires in 15 s). Pass it back to `mouse_click`, `keyboard(action='type')`, `click_element`, or `browser_click` to approve the recovery; the server revalidates the stored target fingerprint (process pid + start-time for windows; a fresh guard for browser tabs) before executing.
 
-**Target-identity timeline**: The server maintains a per-target semantic event timeline (event kinds such as `target_bound`, `action_succeeded`, `action_blocked`, `title_changed`, `rect_changed`, `foreground_changed`, `navigation`, `modal_appeared`, `identity_changed`, `target_closed`). Storage is a per-target ring (32) plus a global cap (256); sensor events are 200 ms leading-edge debounced. It surfaces via the opt-in `include` envelope (`your_last_action` / `events` / the `episodic` memory layer) and the `perception://lens/{id}/events` resource (flag `DESKTOP_TOUCH_PERCEPTION_RESOURCES=1`).
+**Target-identity timeline**: The server maintains a per-target semantic event timeline (event kinds such as `target_bound`, `action_succeeded`, `action_blocked`, `title_changed`, `rect_changed`, `foreground_changed`, `navigation`, `modal_appeared`, `identity_changed`, `target_closed`). Storage is a per-target ring (32) plus a global cap (256); sensor events are 200 ms leading-edge debounced. It surfaces via the opt-in `include` envelope (`your_last_action` / `events` / the `episodic` memory layer) and the `perception://lens/{id}/events` resource (behind `DESKTOP_TOUCH_PERCEPTION_DEBUG_RESOURCES=1`).
 
 **Browser readiness policies**: `browser_click` passes with a warn-note when `readyState !== "complete"` but the selector is already in-viewport (policy: `selectorInViewport`). `browser_navigate` accepts `interactive` (policy: `navigationGate`). `browser_eval` remains strict.
 
@@ -953,6 +961,6 @@ screenshot(diffMode=true)
 
 Registered as `desktop-touch` under `mcpServers` in `~/.claude.json` (stdio). Auto-starts / stops with the Claude CLI.
 
-Build: `cd D:\git\desktop-touch-mcp && npm install` (the `prepare` hook runs `tsc` automatically).
+Build: `git clone` the repo, then `npm install` (the `prepare` hook runs `tsc` automatically).
 
 The Rust native engine (`@harusame64/desktop-touch-engine`) is included in the release zip. It loads as a `.node` addon at startup — no Rust toolchain required for end users. If the addon is missing or fails to load, all UIA and image-diff operations fall back to TypeScript/PowerShell transparently.
