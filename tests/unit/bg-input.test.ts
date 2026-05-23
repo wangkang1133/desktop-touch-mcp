@@ -35,6 +35,10 @@ import {
   postEnterToHwnd,
   postKeyComboToHwnd,
   isBgAutoEnabled,
+  clipboardSetBackoffMs,
+  setClipboardWithRetry,
+  prepareClipboardForPaste,
+  CLIPBOARD_SET_MAX_ATTEMPTS,
 } from "../../src/engine/bg-input.js";
 import { postMessageToHwnd, getWindowClassName, getProcessIdentityByPid } from "../../src/engine/win32.js";
 
@@ -199,6 +203,111 @@ describe("canInjectViaPostMessage — terminal classification", () => {
     vi.mocked(getWindowClassName).mockReturnValue("ConsoleWindowClass");
     const result = canInjectViaPostMessage(11n);
     expect(result.supported).toBe(true);
+  });
+});
+
+describe("clipboardSetBackoffMs", () => {
+  it("grows linearly: 120ms after attempt 0, 240ms after attempt 1, 360ms after attempt 2", () => {
+    expect(clipboardSetBackoffMs(0)).toBe(120);
+    expect(clipboardSetBackoffMs(1)).toBe(240);
+    expect(clipboardSetBackoffMs(2)).toBe(360);
+  });
+});
+
+describe("setClipboardWithRetry", () => {
+  // No real clipboard / timers: setFn and sleepFn are injected so the retry
+  // policy (and the latency / restore-safety invariants) is tested deterministically.
+  it("succeeds on the first attempt without sleeping", async () => {
+    const setFn = vi.fn().mockResolvedValue(true);
+    const sleepFn = vi.fn().mockResolvedValue(undefined);
+    const res = await setClipboardWithRetry("x", { setFn, sleepFn });
+    expect(res).toEqual({ ok: true, attempts: 1 });
+    expect(setFn).toHaveBeenCalledTimes(1);
+    expect(sleepFn).not.toHaveBeenCalled();
+  });
+
+  it("retries the transient and succeeds: fail, fail, then succeed", async () => {
+    const setFn = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const sleepFn = vi.fn().mockResolvedValue(undefined);
+    const res = await setClipboardWithRetry("x", { setFn, sleepFn });
+    expect(res).toEqual({ ok: true, attempts: 3 });
+    expect(setFn).toHaveBeenCalledTimes(3);
+    // backoff between attempts only (2 sleeps for 3 attempts): 120ms then 240ms
+    expect(sleepFn.mock.calls).toEqual([[120], [240]]);
+  });
+
+  it("gives up after the max attempts when every try fails", async () => {
+    const setFn = vi.fn().mockResolvedValue(false);
+    const sleepFn = vi.fn().mockResolvedValue(undefined);
+    const res = await setClipboardWithRetry("x", { setFn, sleepFn });
+    expect(res).toEqual({ ok: false, attempts: CLIPBOARD_SET_MAX_ATTEMPTS });
+    expect(setFn).toHaveBeenCalledTimes(CLIPBOARD_SET_MAX_ATTEMPTS);
+    // never sleeps after the final attempt — latency bounded to (N-1) backoffs
+    expect(sleepFn).toHaveBeenCalledTimes(CLIPBOARD_SET_MAX_ATTEMPTS - 1);
+  });
+
+  it("honours a custom maxAttempts", async () => {
+    const setFn = vi.fn().mockResolvedValue(false);
+    const sleepFn = vi.fn().mockResolvedValue(undefined);
+    const res = await setClipboardWithRetry("x", { setFn, sleepFn, maxAttempts: 1 });
+    expect(res).toEqual({ ok: false, attempts: 1 });
+    expect(setFn).toHaveBeenCalledTimes(1);
+    expect(sleepFn).not.toHaveBeenCalled(); // single attempt → no backoff
+  });
+});
+
+describe("prepareClipboardForPaste — restore-exactly-once invariant", () => {
+  // Guards the most important invariant of pasteIntoConsoleNoFocus: a failed set
+  // restores the snapshot exactly once (never leaving the user's clipboard
+  // clobbered), and the success path does NOT restore here (the post-paste
+  // restore in pasteIntoConsoleNoFocus owns that). A future regression that
+  // moved restore inside the retry loop would fail these.
+  const SAVED = "AAA="; // opaque snapshot token
+
+  it("returns true and does NOT restore when the set succeeds first try", async () => {
+    const setFn = vi.fn().mockResolvedValue(true);
+    const restoreFn = vi.fn().mockResolvedValue(undefined);
+    const sleepFn = vi.fn().mockResolvedValue(undefined);
+    const ok = await prepareClipboardForPaste("x", SAVED, { setFn, restoreFn, sleepFn });
+    expect(ok).toBe(true);
+    expect(restoreFn).not.toHaveBeenCalled();
+    expect(setFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns true and does NOT restore when the set succeeds after a retry", async () => {
+    const setFn = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const restoreFn = vi.fn().mockResolvedValue(undefined);
+    const sleepFn = vi.fn().mockResolvedValue(undefined);
+    const ok = await prepareClipboardForPaste("x", SAVED, { setFn, restoreFn, sleepFn });
+    expect(ok).toBe(true);
+    expect(restoreFn).not.toHaveBeenCalled();
+    // the injected sleepFn propagates through to the retry backoff (one 120ms
+    // wait between the failed first attempt and the successful second)
+    expect(sleepFn.mock.calls).toEqual([[120]]);
+  });
+
+  it("returns false and restores EXACTLY ONCE (with the snapshot) when every set fails", async () => {
+    const setFn = vi.fn().mockResolvedValue(false);
+    const restoreFn = vi.fn().mockResolvedValue(undefined);
+    const sleepFn = vi.fn().mockResolvedValue(undefined);
+    const ok = await prepareClipboardForPaste("x", SAVED, { setFn, restoreFn, sleepFn });
+    expect(ok).toBe(false);
+    expect(setFn).toHaveBeenCalledTimes(CLIPBOARD_SET_MAX_ATTEMPTS);
+    expect(restoreFn).toHaveBeenCalledTimes(1);
+    expect(restoreFn).toHaveBeenCalledWith(SAVED);
+  });
+
+  it("restores once even when the snapshot was unreadable (null)", async () => {
+    const setFn = vi.fn().mockResolvedValue(false);
+    const restoreFn = vi.fn().mockResolvedValue(undefined);
+    const sleepFn = vi.fn().mockResolvedValue(undefined);
+    const ok = await prepareClipboardForPaste("x", null, { setFn, restoreFn, sleepFn });
+    expect(ok).toBe(false);
+    expect(restoreFn).toHaveBeenCalledTimes(1);
+    expect(restoreFn).toHaveBeenCalledWith(null);
   });
 });
 

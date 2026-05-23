@@ -312,6 +312,85 @@ export interface ConsolePasteOutcome {
   reason?: "clipboard_set_failed" | "console_paste_post_failed";
 }
 
+/** Max attempts to set+verify the clipboard before giving up (1 try + 2 retries). */
+export const CLIPBOARD_SET_MAX_ATTEMPTS = 3;
+
+/**
+ * Backoff (ms) before the retry that FOLLOWS failed attempt `attempt` (0-based):
+ * 120 ms after attempt 0, 240 ms after attempt 1, … Pure — unit-testable. Grows
+ * linearly with no cap; with CLIPBOARD_SET_MAX_ATTEMPTS=3 production only ever
+ * uses attempts 0 and 1 (120 / 240 ms) — there is no sleep after the final
+ * attempt — so raise the cap deliberately if you bump the attempt count.
+ */
+export function clipboardSetBackoffMs(attempt: number): number {
+  return 120 * (attempt + 1);
+}
+
+/**
+ * Set the clipboard with bounded retry + backoff, returning whether any attempt
+ * succeeded and how many were made.
+ *
+ * The global clipboard is a single OS resource; when another process holds it
+ * open (a busy desktop, a clipboard manager, our own back-to-back PowerShell
+ * spawns) the set-and-verify misses on the first try — a transient that clears
+ * in well under a second. Retrying turns that recoverable race into a success
+ * instead of a hard send failure.
+ *
+ * This helper owns NEITHER the save NOR the restore: the caller captures the
+ * clipboard snapshot once and restores at most once, so the restore invariant
+ * (never leave the user's clipboard clobbered) is preserved by construction.
+ * `setFn` / `sleepFn` are injectable so the retry policy can be unit-tested with
+ * no real clipboard and no real timers.
+ */
+export async function setClipboardWithRetry(
+  text: string,
+  deps: {
+    setFn: (text: string) => Promise<boolean>;
+    sleepFn?: (ms: number) => Promise<void>;
+    maxAttempts?: number;
+  },
+): Promise<{ ok: boolean; attempts: number }> {
+  const maxAttempts = deps.maxAttempts ?? CLIPBOARD_SET_MAX_ATTEMPTS;
+  const sleepFn = deps.sleepFn ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms)));
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (await deps.setFn(text)) return { ok: true, attempts: attempt + 1 };
+    if (attempt < maxAttempts - 1) await sleepFn(clipboardSetBackoffMs(attempt));
+  }
+  return { ok: false, attempts: maxAttempts };
+}
+
+/**
+ * Front half of the console-paste flow: set the clipboard with retry and, ONLY
+ * on total failure, restore the snapshot exactly once. Returns true when the
+ * clipboard now holds `text` (caller posts the paste) or false when the set
+ * failed after retries (caller returns clipboard_set_failed — this already
+ * restored, so the caller must NOT restore again).
+ *
+ * Split out so the restore-exactly-once invariant — never restored on the
+ * success path here, restored exactly once on total failure, never inside the
+ * retry loop — is unit-testable with injected setFn / restoreFn. The full
+ * `pasteIntoConsoleNoFocus` is otherwise wrapped around native PostMessage calls
+ * that a unit test cannot drive, which is where a future regression (e.g.
+ * restore moved inside the loop) would slip past review unnoticed.
+ */
+export async function prepareClipboardForPaste(
+  text: string,
+  saved: string | null,
+  deps: {
+    setFn: (text: string) => Promise<boolean>;
+    restoreFn: (saved: string | null) => Promise<void>;
+    sleepFn?: (ms: number) => Promise<void>;
+    maxAttempts?: number;
+  },
+): Promise<boolean> {
+  const setResult = await setClipboardWithRetry(text, deps);
+  if (!setResult.ok) {
+    await deps.restoreFn(saved);
+    return false;
+  }
+  return true;
+}
+
 /**
  * Paste `text` into a conhost (ConsoleWindowClass) window atomically WITHOUT
  * stealing foreground, via clipboard + the console Paste command. Multiline-safe.
@@ -337,11 +416,17 @@ export async function pasteIntoConsoleNoFocus(
   const crlf = text.replace(/\r?\n/g, "\r\n");
 
   const saved = await getClipboardB64(); // null = read failed; "" = empty clipboard
-  if (!(await setClipboardVerified(crlf))) {
-    // Set-Clipboard may have landed before the read-back mismatch (another app
-    // raced, or newline tolerance missed) — restore so we never leave the user's
-    // clipboard clobbered on a failed paste (Opus #389 round 1 P2-1).
-    await restoreClipboard(saved);
+  // Set-and-verify with retry: a momentary clipboard lock by another process
+  // makes the first try miss (dogfood #386 P3 follow-up — surfaced as a one-off
+  // clipboard_set_failed during a busy window-launch storm). `saved` is captured
+  // ONCE above; prepareClipboardForPaste restores it exactly once on total
+  // failure, and the success path restores once after the paste (below), so a
+  // failed set never leaves the user's clipboard clobbered (#389 r1 P2-1).
+  const ready = await prepareClipboardForPaste(crlf, saved, {
+    setFn: setClipboardVerified,
+    restoreFn: restoreClipboard,
+  });
+  if (!ready) {
     return { ok: false, reason: "clipboard_set_failed" };
   }
 
