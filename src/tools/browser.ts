@@ -1190,11 +1190,12 @@ async function handleBrowserClickByAxis(args: {
   role?: string;
   scope?: string;
   caseSensitive?: boolean;
+  narrate?: string;
   tabId?: string;
   port: number;
   lensId?: string;
 }): Promise<ToolResult> {
-  const { by, pattern, role, scope, caseSensitive, tabId, port, lensId } = args;
+  const { by, pattern, role, scope, caseSensitive, narrate, tabId, port, lensId } = args;
 
   let perceptionEnvBrowser: import("../engine/perception/types.js").PostPerception | undefined;
   if (lensId) {
@@ -1232,6 +1233,16 @@ async function handleBrowserClickByAxis(args: {
     perceptionEnvBrowser = ag.summary;
   }
 
+  // CDP snapshot before click (for narrate:"rich") — parity with the selector
+  // path so by-axis clients get the same _richForPost navigation diff (Codex P2).
+  let beforeUrl: string | null = null;
+  if (narrate === "rich") {
+    try {
+      const ctx0 = await getTabContext(tabId ?? null, port);
+      beforeUrl = ctx0.url ?? null;
+    } catch { /* ignore */ }
+  }
+
   const outcome = await resolveBrowserActionTarget({
     by, pattern, role, scope, caseSensitive, action: "click", tabId: tabId ?? null, port,
   });
@@ -1243,6 +1254,26 @@ async function handleBrowserClickByAxis(args: {
   // resolver located the element by coords; document-level mutation probe).
   const verifyDelivery = await osClickAndVerify(outcome.physical.x, outcome.physical.y, null, tabId ?? null, port);
   const tabCtx = await getTabContext(tabId ?? null, port);
+
+  // Rich block (narrate:"rich") — same CDP navigation-diff shape as the selector path.
+  let richBlock: RichBlock | undefined;
+  if (narrate === "rich" && beforeUrl !== null) {
+    try {
+      const afterUrl = tabCtx.url ?? null;
+      richBlock = {
+        appeared: [],
+        disappeared: [],
+        valueDeltas: [],
+        diffSource: "cdp",
+        ...(beforeUrl !== afterUrl && afterUrl
+          ? { navigation: { fromUrl: beforeUrl, toUrl: afterUrl } }
+          : {}),
+      };
+    } catch {
+      richBlock = { appeared: [], disappeared: [], valueDeltas: [], diffSource: "none", diffDegraded: "timeout" };
+    }
+  }
+
   return ok({
     ok: true,
     clicked: { by, pattern, ...(role ? { role } : {}) },
@@ -1251,6 +1282,7 @@ async function handleBrowserClickByAxis(args: {
     activeTab: { id: tabCtx.id, title: tabCtx.title, url: tabCtx.url },
     readyState: tabCtx.readyState,
     hints: { verifyDelivery },
+    ...(richBlock ? { _richForPost: richBlock } : {}),
     ...(perceptionEnvBrowser && { _perceptionForPost: perceptionEnvBrowser }),
   });
 }
@@ -1288,7 +1320,7 @@ export const browserClickElementHandler = async ({
     // present `by` means selector is absent → resolver path. The selector path
     // below is unchanged (bit-equal, NFR-1 / AC-9).
     if (by && pattern) {
-      return await handleBrowserClickByAxis({ by, pattern, role, scope, caseSensitive, tabId, port, lensId });
+      return await handleBrowserClickByAxis({ by, pattern, role, scope, caseSensitive, narrate, tabId, port, lensId });
     }
     if (!selector) {
       return failCode("InvalidArgs", "browser_click: provide either selector or by+pattern.", {
