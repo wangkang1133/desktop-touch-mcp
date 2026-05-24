@@ -21,6 +21,12 @@ import { launchNotepad, type NpInstance } from "./helpers/notepad-launcher.js";
 import { parsePayload, sleep } from "./helpers/wait.js";
 import { focusWindow } from "../../src/engine/win32.js";
 import { screenshotHandler } from "../../src/tools/screenshot.js";
+import { spawnBlankWindow } from "./helpers/blank-window.js";
+
+// For the "any click produces a post state" check, click a dedicated, empty
+// throwaway window rather than a hardcoded (100,100) that could land on an
+// arbitrary window or the desktop. Closed in the file-level afterAll.
+const blank = await spawnBlankWindow();
 
 let np: NpInstance;
 
@@ -34,7 +40,10 @@ beforeAll(async () => {
   await sleep(400);
 }, 10_000);
 
-afterAll(() => np?.kill());
+afterAll(() => {
+  np?.kill();
+  blank?.close();
+});
 
 describe("H2: get_history ring buffer", () => {
   it("get_history returns count + actions array", async () => {
@@ -229,14 +238,15 @@ describe("H3: mouse_click → get_context focus propagates within 300ms", () => 
     }
   }, 15_000);
 
-  it("get_context.post.windowChanged is a boolean after mouse_click", async () => {
+  it.skipIf(blank === null)("get_context.post.windowChanged is a boolean after mouse_click", async () => {
     // Any mouse click produces a post state — we just want the structure to be correct.
     // This guards against withPostState dropping post.windowChanged after mouse actions.
+    // Click the dedicated blank window (not a hardcoded coordinate / the desktop).
     const trackedMouseClick = withPostState("mouse_click", mouseClickHandler);
 
     const result = await trackedMouseClick({
-      x: 100,
-      y: 100,
+      x: blank!.point.x,
+      y: blank!.point.y,
       button: "left" as const,
       doubleClick: false,
       homing: false,
