@@ -14,7 +14,10 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { buildCandidateCollectionJs } from "../../src/tools/browser-resolver.js";
+import {
+  buildCandidateCollectionJs,
+  buildActionCandidateFactsJs,
+} from "../../src/tools/browser-resolver.js";
 
 describe("ADR-023 Phase 1 (S1/S7): buildCandidateCollectionJs — bit-equal extraction", () => {
   it("emits the full IIFE for a representative by:text + scope query (snapshot)", () => {
@@ -71,5 +74,51 @@ describe("ADR-023 Phase 1 (S1/S7): buildCandidateCollectionJs — bit-equal extr
     ]) {
       expect(js).toContain(frag);
     }
+  });
+});
+
+describe("ADR-023 Phase 1 PR2: buildActionCandidateFactsJs — gather tail (snapshot)", () => {
+  it("emits the full fact-gather IIFE for a representative by:text query (snapshot)", () => {
+    const js = buildActionCandidateFactsJs({
+      by: "text", pattern: "Save", scope: "#app", caseSensitive: false,
+    });
+    expect(js).toMatchSnapshot();
+  });
+
+  it("reuses the shared matching body verbatim (same per-axis scoring + scan budget)", () => {
+    const js = buildActionCandidateFactsJs({ by: "role", pattern: "button", caseSensitive: false });
+    // Shared body fragments (must match the collection builder's matching core).
+    for (const frag of [
+      "record(el, 1.0, 'text')",
+      "record(el, 0.85, 'roleImplicit')",
+      "record(selectorMatches[i], 1.0, 'selector')",
+      "const SCAN_BUDGET_MS = 3000;",
+      "filtered.sort((a, b) =>",
+    ]) {
+      expect(js).toContain(frag);
+    }
+  });
+
+  it("gather tail: top-N cap, climb depth, elementFromPoint hit-test, viewport metrics", () => {
+    const js = buildActionCandidateFactsJs({ by: "ariaLabel", pattern: "Search", caseSensitive: false });
+    expect(js).toContain("const N = 8;");                       // AMBIGUITY_CANDIDATE_CAP
+    expect(js).toContain("const D = 3;");                       // CLIMB_MAX_DEPTH
+    expect(js).toContain("const top = filtered.slice(0, N);");
+    expect(js).toContain("document.elementFromPoint(cx, cy)"); // receivesEvents hit-test
+    expect(js).toContain("for (let d = 0; d <= D && node; d++)"); // self + D ancestors
+    // window-level coord metrics (no second querySelector for click)
+    expect(js).toContain("const chromeH = window.outerHeight - window.innerHeight;");
+    expect(js).toContain("viewport: { screenX: sx, screenY: sy, dpr: dpr");
+    // candidate fact shape
+    expect(js).toContain("chain: chainOf(el)");
+    expect(js).toContain("nearestLabels: labelsOf(el)");
+    expect(js).toContain("containerHint: hintOf(el)");
+  });
+
+  it("shares the collection error returns (ScopeNotFound / Timeout) via the body", () => {
+    const js = buildActionCandidateFactsJs({ by: "text", pattern: "x", scope: "#nope", caseSensitive: false });
+    expect(js).toContain('document.querySelector("#nope")');
+    expect(js).toContain('return { __error: "ScopeNotFound" };');
+    expect(js).toContain('__error: "Timeout"');
   });
 });

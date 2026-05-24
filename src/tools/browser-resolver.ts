@@ -26,14 +26,29 @@ export interface CandidateCollectionArgs {
   caseSensitive: boolean;
 }
 
+/** Args for the action-target fact gatherer (browser_click/fill by-axis, §2.bis). */
+export interface ActionFactsArgs {
+  by: "text" | "regex" | "role" | "ariaLabel" | "selector";
+  pattern: string;
+  scope?: string;
+  caseSensitive: boolean;
+}
+
 /**
- * Build the injected-JS IIFE that collects, scores, filters and shapes candidate
- * elements for `browser_search`. This is a VERBATIM extraction of the former
- * inline template in `browserSearchHandler` — the generated string is byte-equal
- * (pinned by snapshot) so the public `browser_search` contract is unchanged
- * (NFR-1 / AC-9). Do not change the emitted JS without updating the snapshot.
+ * Shared injected-JS body: candidate matching + scoring + visibility/viewport
+ * filter + score-descending sort. Emits everything from the IIFE open through
+ * building the sorted `filtered` array of `{ el, visible, rect, inVp }` (with the
+ * `matchScore` / `matchedByMap` WeakMaps still in closure scope). Both
+ * `buildCandidateCollectionJs` (browser_search serialization tail) and
+ * `buildActionCandidateFactsJs` (resolver action-target fact tail) embed this
+ * verbatim, then append their own tail — a single source for the candidate
+ * matching/scoring contract (DRY without a second copy of the per-axis loops).
+ *
+ * The two public builders' snapshot tests pin the COMPOSED output byte-for-byte,
+ * so the `browser_search` IIFE stays bit-equal (NFR-1 / AC-9): do not change the
+ * emitted JS here without updating both snapshots.
  */
-export function buildCandidateCollectionJs(args: CandidateCollectionArgs): string {
+function candidateMatchingBodyJs(args: CandidateCollectionArgs): string {
   const { by, pattern, scope, maxResults, offset, visibleOnly, inViewportOnly, caseSensitive } = args;
   return `
 (function() {
@@ -206,7 +221,19 @@ export function buildCandidateCollectionJs(args: CandidateCollectionArgs): strin
     const sb = score(matchScore.get(b.el) || 0, b.visible);
     return sb - sa;
   });
+`;
+}
 
+/**
+ * Build the injected-JS IIFE that collects, scores, filters and shapes candidate
+ * elements for `browser_search`. Composes the shared `candidateMatchingBodyJs`
+ * with the search serialization tail. The generated string is byte-equal with
+ * the former inline template (pinned by snapshot) so the public `browser_search`
+ * contract is unchanged (NFR-1 / AC-9). Do not change the emitted JS without
+ * updating the snapshot.
+ */
+export function buildCandidateCollectionJs(args: CandidateCollectionArgs): string {
+  return `${candidateMatchingBodyJs(args)}
   const total = filtered.length;
   const sliced = filtered.slice(offN, offN + (maxN - offN));
 
@@ -223,6 +250,156 @@ export function buildCandidateCollectionJs(args: CandidateCollectionArgs): strin
   }));
 
   return { total, returned: results.length, truncated: total > offN + results.length, results };
+})()
+`;
+}
+
+/**
+ * Build the injected-JS IIFE that gathers RAW DOM FACTS for action-target
+ * resolution (browser_click / browser_fill by-axis, ADR-023 §2.bis gather/decide
+ * split). Composes the shared `candidateMatchingBodyJs` (same matching + scoring
+ * as browser_search) with a fact-gathering tail that, for the top-N=8 candidates
+ * by score, gathers:
+ *
+ *   - `chain`: self + up to D=3 ancestors, each a ClickableNode (tag / role /
+ *     hasHref / tabindex / hasOnclick / cursorPointer / visible / enabled /
+ *     receivesEvents via elementFromPoint hit-test / viewport rect).
+ *   - `nearestLabels` (≤3 × 40 chars) / `containerHint` (≤40 chars) for ambiguity
+ *     disambiguation.
+ *   - window-level `viewport` metrics (screenX/screenY/dpr/chromeH/chromeW,
+ *     getElementScreenCoords formula) so the resolved viewport rect converts to
+ *     physical screen px WITHOUT a second querySelector (avoids GSC dynamic-class
+ *     re-non-uniqueness; ADR §1.2 D1 / plan §2).
+ *
+ * ALL DOM access lives here; the actionability / climb / uniqueness DECISION is
+ * the pure TS `decideActionTarget`. Returns `{ total, returned, viewport,
+ * candidates: CandidateFacts[] }` or the shared `{ __error }` shape on
+ * ScopeNotFound / InvalidRegex / Timeout. Pinned by snapshot.
+ */
+export function buildActionCandidateFactsJs(args: ActionFactsArgs): string {
+  const { by, pattern, scope, caseSensitive } = args;
+  // maxResults/offset are unused by the gather tail (it takes top-N of the full
+  // sorted set); fixed values keep the shared body's interpolation total. The
+  // resolver always collects visible elements and lets receivesEvents gate the
+  // viewport (so off-viewport candidates fall out as non-actionable, not unseen).
+  return `${candidateMatchingBodyJs({ by, pattern, scope, maxResults: 200, offset: 0, visibleOnly: true, inViewportOnly: false, caseSensitive })}
+  // ── ADR-023 Phase 1 PR2: action-target fact gathering (top-N only, §2.bis). ──
+  const N = ${AMBIGUITY_CANDIDATE_CAP};
+  const D = ${CLIMB_MAX_DEPTH};
+  const top = filtered.slice(0, N);
+
+  // Physical-coord conversion constants (getElementScreenCoords formula,
+  // cdp-bridge.ts) — computed once so browser_click({by}) converts the resolved
+  // viewport rect to screen px WITHOUT a second querySelector (ADR §1.2 D1).
+  const dpr = window.devicePixelRatio || 1;
+  const sx = window.screenX;
+  const sy = window.screenY;
+  const chromeH = window.outerHeight - window.innerHeight;
+  const chromeW = Math.round((window.outerWidth - window.innerWidth) / 2);
+
+  function actNode(el) {
+    const cs2 = window.getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    const vis = cs2.display !== 'none' && cs2.visibility !== 'hidden' && cs2.opacity !== '0' && r.width > 0 && r.height > 0;
+    const enabled = !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+    let receivesEvents = false;
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    if (cx >= 0 && cx < window.innerWidth && cy >= 0 && cy < window.innerHeight) {
+      const hit = document.elementFromPoint(cx, cy);
+      receivesEvents = !!hit && (hit === el || el.contains(hit));
+    }
+    const tiRaw = el.getAttribute('tabindex');
+    const ti = (tiRaw !== null && tiRaw.trim() !== '' && !isNaN(Number(tiRaw))) ? Number(tiRaw) : null;
+    const roleAttr = el.getAttribute('role');
+    return {
+      tag: el.tagName.toLowerCase(),
+      role: roleAttr ? roleAttr.toLowerCase() : null,
+      hasHref: el.tagName === 'A' && el.hasAttribute('href'),
+      tabindex: ti,
+      hasOnclick: el.hasAttribute('onclick'),
+      cursorPointer: cs2.cursor === 'pointer',
+      visible: vis,
+      enabled: enabled,
+      receivesEvents: receivesEvents,
+      rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
+    };
+  }
+
+  function chainOf(el) {
+    const chain = [];
+    let node = el;
+    for (let d = 0; d <= D && node; d++) {
+      chain.push(actNode(node));
+      node = node.parentElement;
+    }
+    return chain;
+  }
+
+  function labelsOf(el) {
+    const out = [];
+    const seen = new Set();
+    function add(t) {
+      if (!t) return;
+      const s = t.trim().replace(/\\s+/g, ' ').slice(0, 40);
+      if (s && !seen.has(s)) { seen.add(s); out.push(s); }
+    }
+    const lb = el.getAttribute('aria-labelledby');
+    if (lb) for (const id of lb.split(/\\s+/)) { const n = document.getElementById(id); if (n) add(n.textContent); }
+    if (el.id) { try { for (const lab of document.querySelectorAll('label[for=' + JSON.stringify(el.id) + ']')) add(lab.textContent); } catch (e) {} }
+    const wrapLabel = el.closest && el.closest('label');
+    if (wrapLabel) add(wrapLabel.textContent);
+    let prev = el.previousElementSibling;
+    let hops = 0;
+    while (prev && hops < 3 && out.length < 3) {
+      const tg = prev.tagName.toLowerCase();
+      if (tg === 'label' || /^h[1-6]$/.test(tg) || tg === 'legend') add(prev.textContent);
+      prev = prev.previousElementSibling; hops++;
+    }
+    return out.slice(0, 3);
+  }
+
+  function hintOf(el) {
+    let node = el.parentElement;
+    let guard = 0;
+    while (node && node !== document.body && guard < 40) {
+      const r = node.getAttribute('role');
+      const tg = node.tagName.toLowerCase();
+      let lm = null;
+      if (r && /^(navigation|dialog|alertdialog|main|banner|complementary|contentinfo|search|form|region)$/.test(r)) lm = r;
+      else if (/^(nav|main|header|footer|aside|form|section)$/.test(tg)) lm = tg;
+      if (lm) {
+        const an = node.getAttribute('aria-label');
+        return (lm + (an ? ' "' + an + '"' : '')).slice(0, 40);
+      }
+      node = node.parentElement; guard++;
+    }
+    return null;
+  }
+
+  const factsList = top.map(function(entry, i) {
+    const el = entry.el;
+    const roleAttr = el.getAttribute('role');
+    return {
+      index: i,
+      chain: chainOf(el),
+      type: classify(el),
+      name: elText(el),
+      role: roleAttr || null,
+      ariaLabel: el.getAttribute('aria-label') || null,
+      matchedBy: matchedByMap.get(el),
+      score: score(matchScore.get(el) || 0, entry.visible),
+      nearestLabels: labelsOf(el),
+      containerHint: hintOf(el),
+    };
+  });
+
+  return {
+    total: filtered.length,
+    returned: factsList.length,
+    viewport: { screenX: sx, screenY: sy, dpr: dpr, chromeH: chromeH, chromeW: chromeW, innerWidth: window.innerWidth, innerHeight: window.innerHeight },
+    candidates: factsList,
+  };
 })()
 `;
 }
@@ -298,6 +475,39 @@ export interface CandidateFacts {
   nearestLabels: string[];
   /** nearest landmark role + accessible name; gatherer caps to 40 chars */
   containerHint: string | null;
+}
+
+/**
+ * Window-level metrics the gatherer computes once (getElementScreenCoords
+ * formula, cdp-bridge.ts) so the resolved viewport rect converts to physical
+ * screen px without a second querySelector. CSS px unless noted.
+ */
+export interface ViewportMetrics {
+  screenX: number;
+  screenY: number;
+  dpr: number;
+  /** outerHeight - innerHeight (tab strip + address bar) */
+  chromeH: number;
+  /** (outerWidth - innerWidth) / 2 (left frame) */
+  chromeW: number;
+  innerWidth: number;
+  innerHeight: number;
+}
+
+/** Full return shape of `buildActionCandidateFactsJs` (success path). */
+export interface GatheredFacts {
+  /** total matches in the full collection (may exceed candidates.length) */
+  total: number;
+  /** number of candidate facts returned (≤ AMBIGUITY_CANDIDATE_CAP) */
+  returned: number;
+  viewport: ViewportMetrics;
+  candidates: CandidateFacts[];
+}
+
+/** Error shape the shared body returns (ScopeNotFound / InvalidRegex / Timeout). */
+export interface GatherError {
+  __error: string;
+  message?: string;
 }
 
 export interface Actionability {
@@ -376,9 +586,15 @@ export function clickableStrength(n: ClickableNode): ClickableStrength {
   return "none";
 }
 
-/** ADR §1.2 D4 actionability gate. */
-export function isActionable(n: ClickableNode): boolean {
-  return n.visible && n.enabled && n.receivesEvents;
+/**
+ * ADR §1.2 D4 actionability gate. `requireReceivesEvents` defaults to true (click
+ * path — the occlusion / off-viewport hit-test is needed before an OS click). The
+ * fill path passes `false`: fill acts via a CDP eval on the resolved element, so
+ * `receivesEvents` (a click-occlusion guard) is not a precondition (plan §S2/S5,
+ * Round 1 P2-2). `visible` + `enabled` still gate both paths.
+ */
+export function isActionable(n: ClickableNode, requireReceivesEvents = true): boolean {
+  return n.visible && n.enabled && (!requireReceivesEvents || n.receivesEvents);
 }
 
 /**
@@ -439,11 +655,24 @@ export const NO_ACTIONABLE_NEXT_HINTS: readonly string[] = [
  *
  * Pure: `facts` are the top-N (score-desc) candidate facts the injected JS
  * gathered; `totalMatches` is the full collection count (may exceed facts.length).
+ *
+ * `opts.requireReceivesEvents` defaults to true (click). The fill path passes
+ * false so a non-occluded-but-not-hit-tested input still resolves (plan §S5).
  */
-export function decideActionTarget(facts: CandidateFacts[], totalMatches: number): ResolveDecision {
+export function decideActionTarget(
+  facts: CandidateFacts[],
+  totalMatches: number,
+  opts: { requireReceivesEvents?: boolean } = {},
+): ResolveDecision {
+  const requireReceivesEvents = opts.requireReceivesEvents ?? true;
   const resolved = facts.map((f) => {
     const c = climbToClickable(f);
-    return { f, clickable: c?.node ?? null, depth: c?.depth ?? -1, actionable: c ? isActionable(c.node) : false };
+    return {
+      f,
+      clickable: c?.node ?? null,
+      depth: c?.depth ?? -1,
+      actionable: c ? isActionable(c.node, requireReceivesEvents) : false,
+    };
   });
 
   // Dedup: several matched candidates (e.g. a button's label span AND the button)
