@@ -17,6 +17,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildCandidateCollectionJs,
   buildActionCandidateFactsJs,
+  buildFillActJs,
 } from "../../src/tools/browser-resolver.js";
 
 describe("ADR-023 Phase 1 (S1/S7): buildCandidateCollectionJs — bit-equal extraction", () => {
@@ -128,5 +129,43 @@ describe("ADR-023 Phase 1 PR2: buildActionCandidateFactsJs — gather tail (snap
     expect(js).toContain('document.querySelector("#nope")');
     expect(js).toContain('return { __error: "ScopeNotFound" };');
     expect(js).toContain('__error: "Timeout"');
+  });
+});
+
+describe("ADR-023 Phase 1 PR4: buildFillActJs — by-axis fill act (snapshot)", () => {
+  it("emits the full fill-act IIFE for a representative by:ariaLabel target (snapshot)", () => {
+    const js = buildFillActJs({ by: "ariaLabel", pattern: "Email address", caseSensitive: false }, 0, 0, "user@example.com");
+    expect(js).toMatchSnapshot();
+  });
+
+  it("reuses the shared candidate pool (same matching body + role filter + top-N)", () => {
+    const js = buildFillActJs({ by: "ariaLabel", pattern: "X", role: "textbox", caseSensitive: false }, 0, 0, "v");
+    for (const frag of [
+      "filtered.sort((a, b) =>",          // shared matching body
+      "const top = pool.slice(0, N);",    // shared pool fragment
+      'const roleFilter = "textbox";',    // role filter shared
+      "record(el, 0.95, 'ariaLabel')",    // shared per-axis scoring
+    ]) {
+      expect(js).toContain(frag);
+    }
+  });
+
+  it("act tail: re-select top[index], climb climbDepth, fillable gate, native setter + events", () => {
+    const js = buildFillActJs({ by: "ariaLabel", pattern: "X", caseSensitive: false }, 2, 1, "hi");
+    expect(js).toContain("if (top.length <= 2) return { ok: false, error: 'index_out_of_range' };");
+    expect(js).toContain("let el = top[2].el;");
+    expect(js).toContain("for (let d = 0; d < 1 && el; d++) el = el.parentElement;");
+    expect(js).toContain("const isInput = tag === 'INPUT' || tag === 'TEXTAREA';");
+    expect(js).toContain("el.isContentEditable === true");
+    expect(js).toContain("error: 'not_fillable'");
+    expect(js).toContain("descriptor.set.call(el, val)");        // React-compatible native setter
+    expect(js).toContain("new InputEvent('input'");
+    expect(js).toContain("new Event('change'");
+    expect(js).toContain("fullMatches: fullActual === val");
+  });
+
+  it("JSON-encodes the value (escapes embedded quotes) and interpolates index/climbDepth as numbers", () => {
+    const js = buildFillActJs({ by: "ariaLabel", pattern: "X", caseSensitive: false }, 0, 0, 'a"b');
+    expect(js).toContain('const val = "a\\"b";');
   });
 });

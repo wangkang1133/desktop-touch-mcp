@@ -28,7 +28,7 @@ import type { RichBlock } from "../engine/uia-diff.js";
 import { evaluatePreToolGuards, buildEnvelopeFor } from "../engine/perception/registry.js";
 import { runActionGuard, isAutoGuardEnabled, validateAndPrepareFix, consumeFix } from "./_action-guard.js";
 import { prepareBrowserEvalExpression } from "./browser-eval-helpers.js";
-import { buildCandidateCollectionJs, resolveBrowserActionTarget, type ResolveActionOutcome } from "./browser-resolver.js";
+import { buildCandidateCollectionJs, resolveBrowserActionTarget, buildFillActJs, type ResolveActionOutcome } from "./browser-resolver.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Schemas
@@ -285,7 +285,15 @@ export const browserSearchSchema = {
 };
 
 export const browserFillInputSchema = {
-  selector: selectorParam,
+  selector: z
+    .string()
+    .optional()
+    .describe("CSS selector for the input element. Provide EITHER selector OR by+pattern."),
+  by: byAxisParam,
+  pattern: byPatternParam,
+  role: byRoleParam,
+  scope: byScopeParam,
+  caseSensitive: byCaseSensitiveParam,
   value: z.string().max(10_000).describe("Text to fill into the input element"),
   tabId: tabIdParam,
   port: portParam,
@@ -687,20 +695,173 @@ async function osClickAndVerify(
 // Handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Shape a fill act result into the tool response — shared by the selector path
+ * and the by-axis path. `identity` is spread into BOTH the failure context and
+ * the success payload (selector mode passes `{ selector }` to keep its wire shape
+ * bit-equal; by-axis passes `{ filled: { by, pattern, role? } }`).
+ *
+ * fullMatches===false → BrowserFillNotDelivered (Issue #181 matrix doc §3.1/§5.2):
+ * the bytes reached the page but the framework's onChange rewrote them. The
+ * subReason heuristic distinguishes a controlled-input transform (actual non-empty
+ * and ≤ requested) from outright rejection.
+ */
+async function finalizeFillResult(
+  actResult: { ok: boolean; error?: string; actual?: string; fullActualLen?: number; fullMatches?: boolean },
+  value: string,
+  identity: Record<string, unknown>,
+  includeContext: boolean,
+  tabId: string | undefined,
+  port: number,
+): Promise<ToolResult> {
+  if (!actResult.ok) {
+    return failWith(actResult.error ?? "browser_fill: fill failed", "browser_fill");
+  }
+  if (actResult.fullMatches === false) {
+    const requestedLen = value.length;
+    const actualLen = actResult.fullActualLen ?? 0;
+    const subReason =
+      actualLen > 0 && actualLen <= requestedLen ? "controlled_input_transform" : "value_not_retained";
+    return failWith(new Error("BrowserFillNotDelivered"), "browser_fill", {
+      ...identity,
+      requested: value.slice(0, 100),
+      requestedLen,
+      actual: actResult.actual,
+      actualLen,
+      subReason,
+      note:
+        subReason === "controlled_input_transform"
+          ? "False-positive watch: React/Vue controlled inputs may rewrite the value in onChange (numbers-only filter, max-length, format mask). The bytes reached the page but the framework chose not to keep them. Treat actual as authoritative."
+          : "The DOM did not retain the requested value after fill — input may be readOnly, disabled, or guarded by a synthetic-event proxy that rejects programmatic writes.",
+      hints: {
+        verifyDelivery: {
+          status: "unverifiable",
+          channel: "cdp",
+          reason: "value_mismatch",
+          subReason,
+          actualLen,
+          requestedLen,
+        },
+      },
+    });
+  }
+  const lines = [
+    JSON.stringify({
+      ok: true,
+      ...identity,
+      value,
+      actual: actResult.actual,
+      // matrix doc §4.2 規範 hint shape — always emit `delivered` on success.
+      hints: { verifyDelivery: { status: "delivered", channel: "cdp" } },
+    }),
+  ];
+  if (includeContext) {
+    const tabCtx = await getCachedTabContext(tabId ?? null, port);
+    lines.push(
+      "",
+      `activeTab: ${JSON.stringify({ id: tabCtx.id, title: tabCtx.title, url: tabCtx.url })}`,
+      `readyState: "${tabCtx.readyState}"`,
+    );
+  }
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+}
+
+/**
+ * by-axis browser_fill: resolve a single actionable target semantically (fill
+ * actionability = visible + enabled, NOT receivesEvents — fill acts via CDP eval,
+ * plan §S5), then ACT in a 2nd eval (deterministic re-gather + index + climb +
+ * native-setter fill). Ambiguous / non-actionable / error stop with a typed
+ * failure. Selector mode stays on its bit-equal 2-eval path.
+ */
+async function handleBrowserFillByAxis(args: {
+  by: "text" | "regex" | "role" | "ariaLabel";
+  pattern: string;
+  role?: string;
+  scope?: string;
+  caseSensitive?: boolean;
+  value: string;
+  tabId?: string;
+  port: number;
+  includeContext: boolean;
+}): Promise<ToolResult> {
+  const { by, pattern, role, scope, caseSensitive, value, tabId, port, includeContext } = args;
+  const outcome = await resolveBrowserActionTarget({
+    by, pattern, role, scope, caseSensitive, action: "fill", tabId: tabId ?? null, port,
+  });
+  const ctx = { by, pattern, ...(role ? { role } : {}), ...(scope ? { scope } : {}) };
+  if (outcome.kind === "error") return browserResolveErrorToFailure(outcome, "browser_fill", ctx);
+  if (outcome.kind !== "resolved") return browserResolveStopToFailure(outcome, "browser_fill", ctx);
+
+  // Resolved → act (2nd eval): re-gather the same pool, re-select top[index],
+  // climb to the resolved element, fill via the native setter. No second
+  // querySelector / coordinate re-find (avoids re-non-uniqueness / occlusion).
+  const actExpr = buildFillActJs({ by, pattern, role, scope, caseSensitive: caseSensitive ?? false }, outcome.index, outcome.climbDepth, value);
+  const actResult = await evaluateInTab(actExpr, tabId ?? null, port) as
+    { ok: boolean; error?: string; tag?: string; actual?: string; fullActualLen?: number; fullMatches?: boolean };
+
+  if (!actResult.ok) {
+    if (actResult.error === "not_fillable") {
+      return failCode(
+        "BrowserNoActionableTarget",
+        `browser_fill: the resolved <${actResult.tag ?? "element"}> is not a fillable input/textarea/contenteditable.`,
+        {
+          suggest: [
+            "Target the input directly with by:'ariaLabel' or by:'role' (role:'textbox')",
+            "Or pass a precise CSS selector",
+          ],
+          context: ctx,
+        },
+      );
+    }
+    // index_out_of_range / resolved_element_lost: the DOM changed between the
+    // resolve gather and the act re-gather.
+    return failCode(
+      "ToolError",
+      `browser_fill: the page changed between resolving and filling (${actResult.error ?? "unknown"}).`,
+      { suggest: ["Retry — the resolver re-resolves against the current DOM"], context: ctx },
+    );
+  }
+
+  return await finalizeFillResult(actResult, value, { filled: { by, pattern, ...(role ? { role } : {}) } }, includeContext, tabId, port);
+}
+
 export const browserFillInputHandler = async ({
   selector,
+  by,
+  pattern,
+  role,
+  scope,
+  caseSensitive,
   value,
   tabId,
   port,
   includeContext,
 }: {
-  selector: string;
+  selector?: string;
+  by?: "text" | "regex" | "role" | "ariaLabel";
+  pattern?: string;
+  role?: string;
+  scope?: string;
+  caseSensitive?: boolean;
   value: string;
   tabId?: string;
   port: number;
   includeContext: boolean;
 }): Promise<ToolResult> => {
   try {
+    // ADR-023 Phase 1: by-axis (semantic) fill path. The registration schema's
+    // .refine() guarantees exactly-one-of(selector | by+pattern), so a present
+    // `by` means selector is absent → resolver path. Selector mode below is
+    // unchanged (bit-equal 2-eval, AC-9).
+    if (by && pattern) {
+      return await handleBrowserFillByAxis({ by, pattern, role, scope, caseSensitive, value, tabId, port, includeContext });
+    }
+    if (!selector) {
+      return failCode("InvalidArgs", "browser_fill: provide either selector or by+pattern.", {
+        suggest: ["Pass a CSS selector, or by+pattern (e.g. by:'ariaLabel', pattern:'Email')."],
+      });
+    }
+
     // Fill sequence: focus the element first, then update its value from page context
     // using the native prototype setter and dispatch InputEvent/change so frameworks
     // such as React/Vue observe the same DOM updates they listen for in normal input flows.
@@ -766,90 +927,10 @@ export const browserFillInputHandler = async ({
 })()`;
     const fillResult = await evaluateInTab(fillExpr, tabId ?? null, port) as
       { ok: boolean; error?: string; actual?: string; fullActualLen?: number; fullMatches?: boolean };
-    if (!fillResult.ok) {
-      return failWith(fillResult.error ?? "browser_fill: fill failed", "browser_fill");
-    }
-
-    // ── Issue #181: post-fill element.value verification (matrix doc §3.1) ──
-    // fullMatches=false means the DOM did not retain the value we sent.
-    // matrix doc §5.2 flags React controlled inputs as a known false-positive
-    // source: the value was *delivered*, but the framework's onChange handler
-    // rewrote it (numbers-only filter, max-length, format mask). We surface
-    // this as a typed failure (BrowserFillNotDelivered) with a sub-reason on
-    // the hint so the caller can disambiguate without resorting to retry.
-    if (fillResult.fullMatches === false) {
-      const requestedLen = value.length;
-      const actualLen = fillResult.fullActualLen ?? 0;
-      // Heuristic: if the actual length is *non-zero and shorter than
-      // requested*, the framework most likely transformed the value
-      // (truncation, character-class filter, format mask). Length ≥ requested
-      // suggests the framework rejected the value entirely (e.g. type=email
-      // with sanitization that prepends a default). Either way the value did
-      // not land cleanly.
-      const subReason =
-        actualLen > 0 && actualLen <= requestedLen
-          ? "controlled_input_transform"
-          : "value_not_retained";
-      // failWith treats every key in the third arg as a context entry except
-      // those listed in ROOT_HOISTED_KEYS (`hints`, etc.). The diagnostic
-      // fields below land under failure.context.* and `hints` lands at the
-      // failure root — matching the success-path envelope shape (matrix doc
-      // §4.2) so callers can read failure.hints.verifyDelivery and
-      // success.hints.verifyDelivery from the same path.
-      return failWith(
-        new Error("BrowserFillNotDelivered"),
-        "browser_fill",
-        {
-          selector,
-          requested: value.slice(0, 100),
-          requestedLen,
-          actual: fillResult.actual,
-          actualLen,
-          subReason,
-          note:
-            subReason === "controlled_input_transform"
-              ? "False-positive watch: React/Vue controlled inputs may rewrite the value in onChange (numbers-only filter, max-length, format mask). The bytes reached the page but the framework chose not to keep them. Treat actual as authoritative."
-              : "The DOM did not retain the requested value after fill — input may be readOnly, disabled, or guarded by a synthetic-event proxy that rejects programmatic writes.",
-          hints: {
-            verifyDelivery: {
-              status: "unverifiable",
-              channel: "cdp",
-              reason: "value_mismatch",
-              subReason,
-              actualLen,
-              requestedLen,
-            },
-          },
-        }
-      );
-    }
-
-    const lines = [
-      JSON.stringify({
-        ok: true,
-        selector,
-        value,
-        actual: fillResult.actual,
-        // matrix doc §4.2 規範 hint shape — always emit `delivered` on success
-        // path so callers can pin verification end-to-end without conditionally
-        // checking `hints` presence.
-        hints: {
-          verifyDelivery: {
-            status: "delivered",
-            channel: "cdp",
-          },
-        },
-      }),
-    ];
-    if (includeContext) {
-      const tabCtx = await getCachedTabContext(tabId ?? null, port);
-      lines.push(
-        "",
-        `activeTab: ${JSON.stringify({ id: tabCtx.id, title: tabCtx.title, url: tabCtx.url })}`,
-        `readyState: "${tabCtx.readyState}"`,
-      );
-    }
-    return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    // Verify + shape the result (shared with the by-axis path). `identity` =
+    // { selector } so the failure context + success response keep the exact
+    // selector-mode keys/order (bit-equal, AC-9).
+    return await finalizeFillResult(fillResult, value, { selector }, includeContext, tabId, port);
   } catch (err) {
     return failWith(err, "browser_fill");
   }
@@ -2647,7 +2728,19 @@ export const browserClickRegistrationHandler = makeCommitWrapper(
  * `browserFillInputHandler` 直接渡しだったため post.* block も追加される
  * behavior 変化あり (additive、互換維持)。
  */
-export const browserFillRegistrationSchema = withEnvelopeIncludeSchema(browserFillInputSchema);
+// ADR-023 Phase 1: exactly-one-of(selector | by+pattern) via .refine() — same
+// zod-4/SDK pattern as browser_click (registerTool, not server.tool's 3-arg form
+// which throws on a ZodObject).
+export const browserFillRegistrationSchema = z
+  .object(withEnvelopeIncludeSchema(browserFillInputSchema))
+  .refine(
+    (a) => {
+      const hasSelector = typeof a.selector === "string" && a.selector.length > 0;
+      const hasBy = typeof a.by === "string" && typeof a.pattern === "string" && a.pattern.length > 0;
+      return hasSelector !== hasBy; // exactly one (XOR)
+    },
+    { message: "browser_fill: provide EITHER selector OR (by + pattern), not both or neither." },
+  );
 
 export const browserFillRegistrationHandler = makeCommitWrapper(
   withRichNarration(
@@ -2871,10 +2964,13 @@ export function registerBrowserTools(server: McpServer): void {
     browserNavigateRegistrationHandler as typeof browserNavigateHandler
   );
 
-  server.tool(
+  server.registerTool(
     "browser_fill",
-    "Fill a form input with a value via CDP — works on React/Vue/Svelte controlled inputs that reject browser_eval value assignment. Use browser_overview or browser_locate first to obtain a stable selector. Use this over browser_eval when setting a controlled input's value via JS does not update the framework state. Caveats: Requires browser_open (CDP active). Does not work on contenteditable rich-text editors — use keyboard(action='type') for those. actual in response shows what the element's value property reads after fill; verify it matches the intended value. Typed errors: code:'BrowserFillNotDelivered' on post-fill value mismatch — note the false-positive case where a React controlled input's onChange transforms the value (delivery actually succeeded; SUGGESTS context surfaces hints.verifyDelivery.subReason:'controlled_input_transform' for that case). When detected, the actual value in the response is authoritative.",
-    browserFillRegistrationSchema,
+    {
+      description:
+        "Fill a form input with a value via CDP — works on React/Vue/Svelte controlled inputs that reject browser_eval value assignment. Two ways to target: (1) selector — a CSS selector (use browser_overview / browser_locate to find one); or (2) by-axis (semantic) — by:'text'|'regex'|'role'|'ariaLabel' + pattern (e.g. by:'ariaLabel', pattern:'Email address', or by:'role', pattern:'textbox'), so you do not have to build a CSS selector. by-axis resolves to a SINGLE fillable element and STOPS with code:'BrowserAmbiguousTarget' (candidates[] + next[] hints) when 2+ match, or code:'BrowserNoActionableTarget' when the match is not a fillable input/textarea/contenteditable — it never guesses. Optionally add role to filter and scope to narrow. Provide EITHER selector OR by+pattern (not both). Use this over browser_eval when setting a controlled input's value via JS does not update framework state. Caveats: Requires browser_open (CDP active). actual in the response shows the element's value after fill; verify it matches the intended value. Typed errors: code:'BrowserFillNotDelivered' on post-fill value mismatch — note the false-positive case where a React controlled input's onChange transforms the value (delivery actually succeeded; hints.verifyDelivery.subReason:'controlled_input_transform' for that case; the actual value is authoritative).",
+      inputSchema: browserFillRegistrationSchema,
+    },
     browserFillRegistrationHandler as typeof browserFillInputHandler
   );
 

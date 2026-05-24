@@ -185,13 +185,39 @@ export const STUB_TOOL_CATALOG: StubToolCatalogEntry[] = [
   },
   {
     "name": "browser_fill",
-    "description": "Fill a form input with a value via CDP — works on React/Vue/Svelte controlled inputs that reject browser_eval value assignment. Use browser_overview or browser_locate first to obtain a stable selector. Use this over browser_eval when setting a controlled input's value via JS does not update the framework state. Caveats: Requires browser_open (CDP active). Does not work on contenteditable rich-text editors — use keyboard(action='type') for those. actual in response shows what the element's value property reads after fill; verify it matches the intended value. Typed errors: code:'BrowserFillNotDelivered' on post-fill value mismatch — note the false-positive case where a React controlled input's onChange transforms the value (delivery actually succeeded; SUGGESTS context surfaces hints.verifyDelivery.subReason:'controlled_input_transform' for that case). When detected, the actual value in the response is authoritative.",
+    "description": "Fill a form input with a value via CDP — works on React/Vue/Svelte controlled inputs that reject browser_eval value assignment. Two ways to target: (1) selector — a CSS selector (use browser_overview / browser_locate to find one); or (2) by-axis (semantic) — by:'text'|'regex'|'role'|'ariaLabel' + pattern (e.g. by:'ariaLabel', pattern:'Email address', or by:'role', pattern:'textbox'), so you do not have to build a CSS selector. by-axis resolves to a SINGLE fillable element and STOPS with code:'BrowserAmbiguousTarget' (candidates[] + next[] hints) when 2+ match, or code:'BrowserNoActionableTarget' when the match is not a fillable input/textarea/contenteditable — it never guesses. Optionally add role to filter and scope to narrow. Provide EITHER selector OR by+pattern (not both). Use this over browser_eval when setting a controlled input's value via JS does not update framework state. Caveats: Requires browser_open (CDP active). actual in the response shows the element's value after fill; verify it matches the intended value. Typed errors: code:'BrowserFillNotDelivered' on post-fill value mismatch — note the false-positive case where a React controlled input's onChange transforms the value (delivery actually succeeded; hints.verifyDelivery.subReason:'controlled_input_transform' for that case; the actual value is authoritative).",
     "inputSchema": {
       "type": "object",
       "properties": {
         "selector": {
+          "description": "CSS selector for the input element. Provide EITHER selector OR by+pattern.",
+          "type": "string"
+        },
+        "by": {
           "type": "string",
-          "description": "CSS selector for the target element (e.g. '#submit', '.btn', 'button[type=submit]')."
+          "enum": [
+            "text",
+            "regex",
+            "role",
+            "ariaLabel"
+          ],
+          "description": "Semantic axis to target by INSTEAD of a CSS selector: 'text' (visible text), 'regex', 'role' (ARIA/implicit role), 'ariaLabel'. Pair with pattern. Resolves to a SINGLE actionable element and STOPS with candidates when ambiguous."
+        },
+        "pattern": {
+          "type": "string",
+          "description": "Value matched against the chosen by axis (required when by is set)."
+        },
+        "role": {
+          "type": "string",
+          "description": "Optional ARIA/implicit-role filter AND-combined with by (e.g. by:'text', pattern:'Save', role:'button')."
+        },
+        "scope": {
+          "type": "string",
+          "description": "Optional CSS selector to limit the by-axis search scope (disambiguation)."
+        },
+        "caseSensitive": {
+          "type": "boolean",
+          "description": "Case-sensitive matching for by:'text'/'regex' (default false)."
         },
         "value": {
           "description": "Text to fill into the input element",
@@ -224,7 +250,6 @@ export const STUB_TOOL_CATALOG: StubToolCatalogEntry[] = [
       },
       "additionalProperties": false,
       "required": [
-        "selector",
         "value"
       ]
     }

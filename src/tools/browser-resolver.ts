@@ -285,14 +285,24 @@ export function buildCandidateCollectionJs(args: CandidateCollectionArgs): strin
  * candidates: CandidateFacts[] }` or the shared `{ __error }` shape on
  * ScopeNotFound / InvalidRegex / Timeout. Pinned by snapshot.
  */
-export function buildActionCandidateFactsJs(args: ActionFactsArgs): string {
+/**
+ * Shared injected-JS fragment: candidate matching body + score-desc top-N pool
+ * (role-filtered). Emits through `const top = pool.slice(0, N)`, leaving
+ * `filtered` / `matchScore` / `matchedByMap` / `N` / `D` / `pool` / `top` in
+ * scope. Both the gather builder (buildActionCandidateFactsJs) and the fill-act
+ * builder (buildFillActJs) embed this verbatim then append their own tail — a
+ * single source for the role filter + top-N cap. Re-running it in the fill-act
+ * eval re-selects the SAME top[index] deterministically (same querySelectorAll
+ * order + scoring), so by-axis fill needs no selector/coordinate re-identification
+ * (avoids re-non-uniqueness; plan §S5).
+ */
+function candidatePoolJs(args: ActionFactsArgs): string {
   const { by, pattern, scope, caseSensitive, role } = args;
-  // maxResults/offset are unused by the gather tail (it takes top-N of the full
-  // sorted set); fixed values keep the shared body's interpolation total. The
-  // resolver always collects visible elements and lets receivesEvents gate the
-  // viewport (so off-viewport candidates fall out as non-actionable, not unseen).
+  // maxResults/offset are unused by the tails (they take top-N of the full sorted
+  // set); fixed values keep the shared body's interpolation total. The resolver
+  // always collects visible elements and lets receivesEvents gate the viewport.
   return `${candidateMatchingBodyJs({ by, pattern, scope, maxResults: 200, offset: 0, visibleOnly: true, inViewportOnly: false, caseSensitive })}
-  // ── ADR-023 Phase 1 PR2: action-target fact gathering (top-N only, §2.bis). ──
+  // ── ADR-023 Phase 1: action-target candidate pool (top-N, role-filtered). ──
   const N = ${AMBIGUITY_CANDIDATE_CAP};
   const D = ${CLIMB_MAX_DEPTH};
 
@@ -313,7 +323,11 @@ export function buildActionCandidateFactsJs(args: ActionFactsArgs): string {
     return false;
   }
   const pool = roleFilter ? filtered.filter(function(e) { return roleMatches(e.el); }) : filtered;
-  const top = pool.slice(0, N);
+  const top = pool.slice(0, N);`;
+}
+
+export function buildActionCandidateFactsJs(args: ActionFactsArgs): string {
+  return `${candidatePoolJs(args)}
 
   // Physical-coord conversion constants (getElementScreenCoords formula,
   // cdp-bridge.ts) — computed once so browser_click({by}) converts the resolved
@@ -431,6 +445,59 @@ export function buildActionCandidateFactsJs(args: ActionFactsArgs): string {
     viewport: { screenX: sx, screenY: sy, dpr: dpr, chromeH: chromeH, chromeW: chromeW, innerWidth: window.innerWidth, innerHeight: window.innerHeight },
     candidates: factsList,
   };
+})()
+`;
+}
+
+/**
+ * Build the injected-JS IIFE that ACTS on a by-axis fill target (browser_fill
+ * by-axis, plan §S5 — the 2nd eval: gather→decide ran in node, this acts). It
+ * re-runs the SAME candidate matching/pool as the gather eval (deterministic —
+ * identical querySelectorAll order + scoring), re-selects `top[index]`, climbs
+ * `climbDepth` ancestors to the resolved element, verifies it is fillable
+ * (input / textarea / contenteditable), focuses it, sets the value via the native
+ * prototype setter + dispatches InputEvent/'change' (React/Vue-compatible — the
+ * same path as the selector fill), and reads `element.value` back.
+ *
+ * Re-gather+index is used (NOT a fresh querySelector or an elementFromPoint
+ * coordinate re-find) so a GSC dynamic class cannot re-match differently
+ * (re-non-uniqueness) and an overlay cannot be mis-targeted (occlusion). Returns
+ * `{ ok:true, actual, fullActualLen, fullMatches }` or `{ ok:false, error }`
+ * (index_out_of_range / resolved_element_lost / not_fillable). Pinned by snapshot.
+ */
+export function buildFillActJs(args: ActionFactsArgs, index: number, climbDepth: number, value: string): string {
+  return `${candidatePoolJs(args)}
+  // ── ADR-023 Phase 1 PR4: by-axis fill ACT (deterministic re-gather + index). ──
+  if (top.length <= ${index}) return { ok: false, error: 'index_out_of_range' };
+  let el = top[${index}].el;
+  for (let d = 0; d < ${climbDepth} && el; d++) el = el.parentElement;
+  if (!el) return { ok: false, error: 'resolved_element_lost' };
+
+  const tag = el.tagName;
+  const isInput = tag === 'INPUT' || tag === 'TEXTAREA';
+  const isEditable = el.isContentEditable === true;
+  if (!isInput && !isEditable) return { ok: false, error: 'not_fillable', tag: tag.toLowerCase() };
+
+  el.focus();
+  const val = ${JSON.stringify(value)};
+  if (isInput) {
+    if (typeof el.select === 'function') el.select();
+    let proto = null;
+    if (tag === 'INPUT') proto = HTMLInputElement.prototype;
+    else if (tag === 'TEXTAREA') proto = HTMLTextAreaElement.prototype;
+    const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
+    if (descriptor && descriptor.set) descriptor.set.call(el, val);
+    else el.value = val;
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: val }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    const fullActual = el.value !== undefined ? el.value : '';
+    return { ok: true, actual: (fullActual || '').slice(0, 100), fullActualLen: fullActual.length, fullMatches: fullActual === val };
+  }
+  // contenteditable
+  el.textContent = val;
+  el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: val }));
+  const fullActual = el.textContent || '';
+  return { ok: true, actual: (fullActual || '').slice(0, 100), fullActualLen: fullActual.length, fullMatches: fullActual === val };
 })()
 `;
 }

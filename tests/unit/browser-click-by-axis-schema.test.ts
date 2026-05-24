@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { browserClickRegistrationSchema } from "../../src/tools/browser.js";
+import { browserClickRegistrationSchema, browserFillRegistrationSchema } from "../../src/tools/browser.js";
 
 describe("browser_click registration schema — exactly-one-of(selector | by+pattern)", () => {
   it("accepts selector alone", () => {
@@ -53,6 +53,38 @@ describe("browser_click registration schema — exactly-one-of(selector | by+pat
     expect(def?.type).toBe("object");
     const shape = def?.shape ?? {};
     for (const key of ["selector", "by", "pattern", "role", "scope", "include"]) {
+      expect(Object.keys(shape)).toContain(key);
+    }
+  });
+});
+
+describe("browser_fill registration schema — exactly-one-of(selector | by+pattern)", () => {
+  it("accepts selector + value", () => {
+    expect(browserFillRegistrationSchema.safeParse({ selector: "#email", value: "x" }).success).toBe(true);
+  });
+
+  it("accepts by + pattern + value", () => {
+    expect(browserFillRegistrationSchema.safeParse({ by: "ariaLabel", pattern: "Email", value: "x" }).success).toBe(true);
+  });
+
+  it("rejects BOTH selector and by+pattern", () => {
+    expect(browserFillRegistrationSchema.safeParse({ selector: "#e", by: "ariaLabel", pattern: "Email", value: "x" }).success).toBe(false);
+  });
+
+  it("rejects NEITHER", () => {
+    expect(browserFillRegistrationSchema.safeParse({ value: "x" }).success).toBe(false);
+  });
+
+  it("requires value", () => {
+    expect(browserFillRegistrationSchema.safeParse({ by: "ariaLabel", pattern: "Email" }).success).toBe(false);
+  });
+
+  it("survives the refine as a ZodObject with all by-axis + value properties", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const def = (browserFillRegistrationSchema as any)._zod?.def;
+    expect(def?.type).toBe("object");
+    const shape = def?.shape ?? {};
+    for (const key of ["selector", "by", "pattern", "role", "scope", "value", "include"]) {
       expect(Object.keys(shape)).toContain(key);
     }
   });
