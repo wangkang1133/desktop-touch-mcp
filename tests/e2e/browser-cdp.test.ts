@@ -51,23 +51,31 @@ afterAll(() => {
   chrome?.kill();
 });
 
-async function waitForLoad(expectedTitle?: string, maxMs = 8_000): Promise<void> {
+// Readiness gate. The original version only checked readyState + document.title,
+// which passes the instant the <head> commits — before the <body> is parsed and
+// laid out. Under full-suite load (many Chrome instances launched first, plus the
+// default component-extension targets that share the CDP /json list), that early
+// pass let DOM tests run against a not-yet-populated document → flaky
+// "#btn-submit not found" / "document.body is null" failures (the body wasn't
+// there yet). We now poll for the actual fixture element to exist AND be laid out
+// (getBoundingClientRect().width > 0) — the same element-level readiness the other
+// browser e2e suites use, which do not flake. 15s headroom for a loaded machine.
+async function waitForLoad(expectedTitle?: string, maxMs = 15_000): Promise<void> {
+  const titleClause = expectedTitle ? ` && document.title === ${JSON.stringify(expectedTitle)}` : "";
+  const ready = `document.readyState === 'complete'${titleClause}` +
+    ` && !!document.body && document.getElementById('btn-submit') !== null` +
+    ` && document.getElementById('btn-submit').getBoundingClientRect().width > 0`;
   const deadline = Date.now() + maxMs;
   while (Date.now() < deadline) {
     try {
-      const state = await evaluateInTab("document.readyState", null, TEST_PORT);
-      if (state === "complete") {
-        if (!expectedTitle) return;
-        const title = await evaluateInTab("document.title", null, TEST_PORT);
-        if (title === expectedTitle) return;
-      }
+      if (await evaluateInTab(ready, null, TEST_PORT) === true) return;
     } catch {
       // session may not be ready yet
     }
     await sleep(300);
   }
   throw new Error(
-    `Page did not finish loading${expectedTitle ? ` with title "${expectedTitle}"` : ""} within ${maxMs}ms`
+    `Page did not finish loading${expectedTitle ? ` with title "${expectedTitle}"` : ""} (with #btn-submit laid out) within ${maxMs}ms`
   );
 }
 
