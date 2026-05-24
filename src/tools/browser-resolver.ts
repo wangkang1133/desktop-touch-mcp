@@ -474,13 +474,21 @@ export function buildFillActJs(args: ActionFactsArgs, index: number, climbDepth:
   if (!el) return { ok: false, error: 'resolved_element_lost' };
 
   const tag = el.tagName;
-  const isInput = tag === 'INPUT' || tag === 'TEXTAREA';
+  const ty = (el.getAttribute('type') || '').toLowerCase();
+  // Text-entry controls only. Exclude non-text input types (Codex P1): type=file
+  // THROWS on a non-empty .value assignment; checkbox/radio/button/submit/reset/
+  // image/range/color/hidden ignore a value string (a false-positive "filled") or
+  // are not text targets. Same exclusion as the 'textbox' role filter.
+  const isTextInput = tag === 'INPUT' && !/^(button|submit|reset|checkbox|radio|range|color|file|image|hidden)$/.test(ty);
+  const isTextArea = tag === 'TEXTAREA';
   const isEditable = el.isContentEditable === true;
-  if (!isInput && !isEditable) return { ok: false, error: 'not_fillable', tag: tag.toLowerCase() };
+  if (!isTextInput && !isTextArea && !isEditable) {
+    return { ok: false, error: 'not_fillable', tag: tag.toLowerCase() + (ty ? '[type=' + ty + ']' : '') };
+  }
 
   el.focus();
   const val = ${JSON.stringify(value)};
-  if (isInput) {
+  if (isTextInput || isTextArea) {
     if (typeof el.select === 'function') el.select();
     let proto = null;
     if (tag === 'INPUT') proto = HTMLInputElement.prototype;

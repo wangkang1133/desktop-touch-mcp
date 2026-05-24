@@ -103,4 +103,12 @@ describe.skipIf(!CHROME_AVAILABLE)("browser_fill by-axis — stops (headless)", 
     expect(r.ok, JSON.stringify(r)).toBe(false);
     expect(r.code).toBe("ScopeNotFound");
   });
+
+  it("a non-text input (checkbox) is not fillable → BrowserNoActionableTarget (Codex P1)", async () => {
+    // <input type=checkbox> is strong+visible+enabled so it RESOLVES, but the act
+    // eval must reject it (setting .value would be a false-positive 'filled').
+    const r = await fill({ by: "ariaLabel", pattern: "Accept terms", value: "x" });
+    expect(r.ok, JSON.stringify(r)).toBe(false);
+    expect(r.code).toBe("BrowserNoActionableTarget");
+  });
 });

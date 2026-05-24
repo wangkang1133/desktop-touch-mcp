@@ -155,7 +155,7 @@ describe("ADR-023 Phase 1 PR4: buildFillActJs — by-axis fill act (snapshot)", 
     expect(js).toContain("if (top.length <= 2) return { ok: false, error: 'index_out_of_range' };");
     expect(js).toContain("let el = top[2].el;");
     expect(js).toContain("for (let d = 0; d < 1 && el; d++) el = el.parentElement;");
-    expect(js).toContain("const isInput = tag === 'INPUT' || tag === 'TEXTAREA';");
+    expect(js).toContain("const isTextInput = tag === 'INPUT' && !/^(button|submit|reset|checkbox|radio|range|color|file|image|hidden)$/.test(ty);");
     expect(js).toContain("el.isContentEditable === true");
     expect(js).toContain("error: 'not_fillable'");
     expect(js).toContain("descriptor.set.call(el, val)");        // React-compatible native setter
