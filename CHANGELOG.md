@@ -62,6 +62,19 @@
   `'url_matches'` for an SPA route change, or `'ready_state'` for page load —
   rather than a generic timeout error.
 
+### Fixed
+
+- **`browser_click` no longer mis-fires at the screen corner when the browser
+  window is minimized.** A minimized Chrome/Edge window reports an off-screen
+  position for its content, so `browser_click` could compute a click point the OS
+  clamps to the top-left corner (0,0) — moving the cursor there and tripping the
+  built-in safety stop, which closed the connection. `browser_click` now detects a
+  minimized/off-screen window up front and stops with a typed
+  `BrowserTargetMinimized` error (with a hint to restore the window and retry)
+  instead of clicking. This applies to both the `selector` and the `by`+`pattern`
+  paths. `browser_fill` is unaffected — it types into the page directly and works
+  even when the window is minimized.
+
 ## [1.8.0] - 2026-05-23 — Terminal `run` can wait for a command to finish (exit code) + a `desktop_act` hint after typing into native fields
 
 ### Added

@@ -16,6 +16,7 @@ import {
   getDomHtml,
   disconnectAll,
   getTabContext,
+  isOffscreenMinimized,
   CMD_TIMEOUT_MS,
   type TabContext,
 } from "../engine/cdp-bridge.js";
@@ -1266,6 +1267,32 @@ function browserResolveStopToFailure(
 }
 
 /**
+ * Typed failure for a click against a minimized / off-screen-parked browser
+ * window (window.screenX/screenY at the Windows -32000 marker). Returned by BOTH
+ * click paths BEFORE the OS click so the cursor never lands at the OS-clamped
+ * (0,0) corner — which would trip the top-left failsafe dwell and kill the
+ * server. Shared so the message/suggest stay identical across selector + by-axis.
+ *
+ * `browser_fill` is deliberately exempt: it writes via a CDP eval on the page,
+ * not an OS click, so a minimized window is harmless there. Inline failCode (the
+ * BrowserAmbiguousTarget / ElementNotInViewport precedent) — no SUGGESTS entry,
+ * so no catalog-drift cascade.
+ */
+function browserMinimizedFailure(ctx: Record<string, unknown>): ToolResult {
+  return failCode(
+    "BrowserTargetMinimized",
+    "browser_click: the target Chrome/Edge window is minimized, so its element coordinates resolve off-screen — clicking would mis-fire at the screen corner. Restore the window and retry.",
+    {
+      suggest: [
+        "Restore / bring the browser window to the foreground (click its taskbar icon, or focus_window by its title), then retry browser_click.",
+        "If you only need to enter text, browser_fill works on a minimized window — it sets the value via the page without an OS click.",
+      ],
+      context: ctx,
+    },
+  );
+}
+
+/**
  * by-axis browser_click: resolve a single actionable target semantically, then
  * OS-click at its resolved physical coords (no second querySelector — coords come
  * from the same gather eval, ADR §1.2 D1). Ambiguous / non-actionable / error
@@ -1336,6 +1363,14 @@ async function handleBrowserClickByAxis(args: {
   const ctx = { by, pattern, ...(role ? { role } : {}), ...(scope ? { scope } : {}) };
   if (outcome.kind === "error") return browserResolveErrorToFailure(outcome, "browser_click", ctx);
   if (outcome.kind !== "resolved") return browserResolveStopToFailure(outcome, "browser_click", ctx);
+
+  // Minimized-window guard: the gather eval's viewport origin is the Windows
+  // -32000 parking marker → outcome.physical is a large negative point the OS
+  // would clamp to (0,0). Stop before the OS click so we never trip the failsafe
+  // (the resolve gather above is a pure CDP eval — no click happened yet).
+  if (isOffscreenMinimized(outcome.viewport.screenX, outcome.viewport.screenY)) {
+    return browserMinimizedFailure(ctx);
+  }
 
   // Resolved: OS-click at the physical point (probe with null selector — the
   // resolver located the element by coords; document-level mutation probe).
@@ -1492,6 +1527,14 @@ export const browserClickElementHandler = async ({
       effectiveTabId ?? null,
       port
     );
+    // Minimized-window guard (same as the by-axis path): when the window origin
+    // is the Windows -32000 marker, coords.{x,y} are off-screen negatives the OS
+    // would clamp to (0,0). Checked before the inViewport gate because a
+    // minimized window still reports its elements as in-viewport (the viewport
+    // layout is intact) — so without this it falls through to the OS click.
+    if (isOffscreenMinimized(coords.screenX, coords.screenY)) {
+      return browserMinimizedFailure({ selector: effectiveSelector });
+    }
     if (!coords.inViewport) {
       return failCode(
         "ElementNotInViewport",

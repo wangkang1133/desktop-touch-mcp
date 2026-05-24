@@ -18,6 +18,29 @@ export const DEFAULT_CDP_PORT = 9222;
 export const CMD_TIMEOUT_MS = 15_000;
 const CONNECT_TIMEOUT_MS = 5_000;
 
+/**
+ * Windows parks a minimized (or pathologically off-screen) top-level window's
+ * origin at (-32000, -32000). When a CDP target Chrome/Edge is minimized,
+ * `window.screenX` / `window.screenY` return that marker while the page layout
+ * (innerWidth, getBoundingClientRect) stays valid — so a viewport→screen
+ * conversion (getElementScreenCoords / browser-resolver physicalPoint) produces a
+ * large negative screen point that the OS clamps to (0,0). An OS mouse click
+ * there parks the cursor in the top-left failsafe zone and the dwell watchdog
+ * kills the server (`src/utils/failsafe.ts`). Detect this from the window origin
+ * BEFORE converting/clicking and stop with a typed error instead.
+ *
+ * The exact parking marker (-32000) is far beyond any real multi-monitor layout
+ * (that would be a 32000px-negative origin), so a legitimately left/top-positioned
+ * secondary monitor is never mis-flagged — only the click path guards on this; a
+ * CDP-eval write (browser_fill) is unaffected by a minimized window.
+ */
+export const MINIMIZED_WINDOW_SCREEN_COORD = -32_000;
+
+/** True when a window's CSS-px origin is at/below the Windows minimized-parking marker. */
+export function isOffscreenMinimized(screenX: number, screenY: number): boolean {
+  return screenX <= MINIMIZED_WINDOW_SCREEN_COORD || screenY <= MINIMIZED_WINDOW_SCREEN_COORD;
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface CdpTab {
@@ -43,6 +66,10 @@ export interface ElementCoords {
   height: number;
   /** Whether the element is fully within the viewport */
   inViewport: boolean;
+  /** Window origin X (window.screenX, CSS px) — lets the click path detect a minimized/off-screen window before clicking (isOffscreenMinimized). */
+  screenX: number;
+  /** Window origin Y (window.screenY, CSS px). See screenX. */
+  screenY: number;
 }
 
 // ─── CDP Session ──────────────────────────────────────────────────────────────
@@ -435,6 +462,11 @@ export async function getElementScreenCoords(
     height: Math.round(rect.height * dpr),
     x:      Math.round((physLeft + physRight)  / 2),
     y:      Math.round((physTop  + physBottom) / 2),
+    // Raw window origin (CSS px) so the click caller can detect a minimized /
+    // off-screen-parked window (window.screenX/Y === -32000) before issuing an
+    // OS click that the OS would clamp to (0,0). See isOffscreenMinimized.
+    screenX: sx,
+    screenY: sy,
     inViewport: (function() {
       var cx = rect.left + rect.width / 2;
       var cy = rect.top  + rect.height / 2;
