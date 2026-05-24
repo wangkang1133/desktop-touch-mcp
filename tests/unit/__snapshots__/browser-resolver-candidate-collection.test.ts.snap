@@ -445,6 +445,14 @@ exports[`ADR-023 Phase 1 PR2: buildActionCandidateFactsJs — gather tail (snaps
       visible: vis,
       enabled: enabled,
       receivesEvents: receivesEvents,
+      // Role-filter match for THIS node (uses the same roleMatches predicate that
+      // builds the pool, so input type is available). true when no role filter is
+      // set. decideActionTarget gates the climb-resolved clickable on this so a
+      // role-constrained action never resolves to a wrong-role ancestor (the climb
+      // picks the NEAREST strong clickable, which the chain-aware pool filter may
+      // have admitted via a FARTHER role-matching ancestor — e.g. role:'button'
+      // with an <a> nested in a div[role=button]).
+      roleMatch: roleFilter ? roleMatches(el) : true,
       rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
     };
   }

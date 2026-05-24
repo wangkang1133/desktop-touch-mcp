@@ -390,6 +390,14 @@ export function buildActionCandidateFactsJs(args: ActionFactsArgs): string {
       visible: vis,
       enabled: enabled,
       receivesEvents: receivesEvents,
+      // Role-filter match for THIS node (uses the same roleMatches predicate that
+      // builds the pool, so input type is available). true when no role filter is
+      // set. decideActionTarget gates the climb-resolved clickable on this so a
+      // role-constrained action never resolves to a wrong-role ancestor (the climb
+      // picks the NEAREST strong clickable, which the chain-aware pool filter may
+      // have admitted via a FARTHER role-matching ancestor — e.g. role:'button'
+      // with an <a> nested in a div[role=button]).
+      roleMatch: roleFilter ? roleMatches(el) : true,
       rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
     };
   }
@@ -601,6 +609,19 @@ export interface ClickableNode {
   enabled: boolean;
   /** `document.elementFromPoint(center)` hit is this node or a descendant (not occluded) */
   receivesEvents: boolean;
+  /**
+   * Role-filter match for this node: `false` ONLY when a `role` filter was given
+   * AND this node's role does not satisfy it (computed in the gatherer via the
+   * same `roleMatches` predicate that builds the pool, so input `type` is
+   * available). `undefined`/`true` otherwise (no filter, or a match).
+   * `decideActionTarget` gates the climb-resolved clickable on `roleMatch !==
+   * false`, so a role-constrained action never resolves to a wrong-role ancestor:
+   * the chain-aware pool filter admits a candidate when ANY ancestor within D
+   * matches the role, but the climb resolves to the NEAREST strong clickable —
+   * which may be a different-role element (an `<a>` nested in a div[role=button]).
+   * Without the gate, role:'button' could silently click that link.
+   */
+  roleMatch?: boolean;
   /** viewport rect (CSS px), rounded */
   rect: RectXYWH;
 }
@@ -821,7 +842,14 @@ export function decideActionTarget(
       f,
       clickable: c?.node ?? null,
       depth: c?.depth ?? -1,
-      actionable: c ? isActionable(c.node, requireReceivesEvents) : false,
+      // Role gate: the climb resolves to the nearest strong clickable, but the
+      // chain-aware pool filter may have admitted this candidate via a FARTHER
+      // role-matching ancestor. If the resolved clickable does not itself satisfy
+      // the role filter (roleMatch === false), it is NOT actionable — a role-
+      // constrained action must stop (noActionable) rather than silently act on a
+      // wrong-role element (e.g. role:'button' resolving to an <a> nested in a
+      // div[role=button]). roleMatch is undefined when no role filter was set.
+      actionable: c ? isActionable(c.node, requireReceivesEvents) && c.node.roleMatch !== false : false,
     };
   });
 

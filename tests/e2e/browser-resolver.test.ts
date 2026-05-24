@@ -169,6 +169,22 @@ describe.skipIf(!CHROME_AVAILABLE)("resolveBrowserActionTarget — role filter (
     expect(r.kind, JSON.stringify(r)).toBe("resolved");
     if (r.kind === "resolved") expect(r.climbDepth).toBe(0);
   });
+
+  // Role gate (Codex P1): the chain-aware pool filter admits a candidate when ANY
+  // ancestor within D matches the role, but the climb resolves to the NEAREST
+  // strong clickable. For an <a> nested in a div[role=button], by:'text'+
+  // role:'button' must NOT silently click the link — the gate rejects the
+  // wrong-role resolution → noActionable.
+  it("role:'button' on a link nested in a div[role=button] → noActionable (no wrong-role click)", async () => {
+    const r = await resolve({ by: "text", pattern: "Linky Action", role: "button", action: "click" });
+    expect(r.kind, JSON.stringify(r)).toBe("noActionable");
+  });
+
+  it("role:'link' on that same nested link → resolved (the link IS the requested role)", async () => {
+    const r = await resolve({ by: "text", pattern: "Linky Action", role: "link", action: "click" });
+    expect(r.kind, JSON.stringify(r)).toBe("resolved");
+    if (r.kind === "resolved") expect(r.climbDepth).toBe(1);
+  });
 });
 
 describe.skipIf(!CHROME_AVAILABLE)("resolveBrowserActionTarget — fill path (AC-4)", () => {
