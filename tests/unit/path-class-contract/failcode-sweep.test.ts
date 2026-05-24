@@ -77,7 +77,7 @@ describe("PR-P2-3 layer A: failCode shape contract (frozen, key-order + omission
 // the literal → failCode refactor preserves the shape byte-for-byte.
 
 describe("PR-P2-3 layer B: failCode reproduces the (C) literals byte-for-byte", () => {
-  it("browser_click ElementNotInViewport (with context) — browser.ts:1010/1048", () => {
+  it("browser_click ElementNotInViewport (with context) — the viewport gates in browserClickElementHandler", () => {
     const sel = "#submit";
     expect(
       wireText(

@@ -16,6 +16,7 @@ import {
   getDomHtml,
   disconnectAll,
   getTabContext,
+  CMD_TIMEOUT_MS,
   type TabContext,
 } from "../engine/cdp-bridge.js";
 import { resolveWellKnownPath, spawnDetached, killProcessesByName } from "../utils/launch.js";
@@ -121,6 +122,11 @@ export const browserClickElementSchema = {
     "and a perception envelope is attached to post.perception on success."
   ),
   fixId: z.string().optional().describe("Approve a pending suggestedFix (one-shot, 15s TTL)."),
+  scrollIntoView: coercedBoolean().default(false).describe(
+    "When true, if the target is outside the viewport, scroll it into view (centered) before clicking, " +
+    "instead of failing with ElementNotInViewport. Default false preserves the explicit " +
+    "scrollIntoView-then-retry workflow."
+  ),
 };
 
 // Phase 3: kept as a ZodRawShape for internal documentation / type derivation;
@@ -962,6 +968,41 @@ export const browserFindElementHandler = async ({
   }
 };
 
+/**
+ * Phase 0 (ADR-023 FR-5): opt-in scroll-into-view for browser_click. One eval
+ * measures the element and, if its center is outside the viewport, calls
+ * scrollIntoView({block:'center'}); the caller then waits briefly for the scroll
+ * to settle so the subsequent coord fetch sees it on-screen. The in-viewport
+ * test mirrors getElementScreenCoords' center-based definition (cdp-bridge.ts).
+ * Best-effort: a missing element / eval failure is swallowed here and surfaced
+ * by the existing viewport / coord checks downstream.
+ */
+async function scrollSelectorIntoViewIfNeeded(
+  selector: string,
+  tabId: string | null,
+  port: number,
+): Promise<void> {
+  try {
+    const expr = `(function(){
+      var el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return 'missing';
+      var r = el.getBoundingClientRect();
+      var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      if (cx >= 0 && cx < window.innerWidth && cy >= 0 && cy < window.innerHeight) return 'inViewport';
+      // behavior:'instant' disables CSS scroll-behavior:smooth so the element is
+      // in place by the time the short settle below elapses (Phase 0 review P2-3).
+      el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+      return 'scrolled';
+    })()`;
+    const res = await evaluateInTab(expr, tabId, port);
+    if (res === "scrolled") {
+      await new Promise<void>((r) => setTimeout(r, 250));
+    }
+  } catch {
+    /* best-effort — the real failure is reported by the viewport check below */
+  }
+}
+
 export const browserClickElementHandler = async ({
   selector,
   narrate,
@@ -969,6 +1010,7 @@ export const browserClickElementHandler = async ({
   port,
   lensId,
   fixId,
+  scrollIntoView,
 }: {
   selector: string;
   narrate?: string;
@@ -976,6 +1018,7 @@ export const browserClickElementHandler = async ({
   port: number;
   lensId?: string;
   fixId?: string;
+  scrollIntoView?: boolean;
 }): Promise<ToolResult> => {
   try {
     // Phase G: fixId approval prologue
@@ -1004,7 +1047,11 @@ export const browserClickElementHandler = async ({
     } else if (isAutoGuardEnabled() && (tabId || port)) {
       // Phase F: get coords first so we know inViewport for selectorInViewport policy
       const coordsForGuard = await getElementScreenCoords(effectiveSelector, effectiveTabId ?? null, port);
-      if (!coordsForGuard.inViewport) {
+      // Phase 0 (ADR-023 FR-5): when scrollIntoView is requested, do NOT hard-fail
+      // here — the post-guard scroll (after the block decision) brings it into view
+      // and the main viewport check below still gates clickability. readyState!=
+      // complete + off-viewport still blocks via the guard (browserSelectorInViewport).
+      if (!coordsForGuard.inViewport && !scrollIntoView) {
         // Element not in viewport — fail before running guard
         return failCode(
           "ElementNotInViewport",
@@ -1037,6 +1084,13 @@ export const browserClickElementHandler = async ({
         const ctx = await getTabContext(effectiveTabId ?? null, port);
         beforeUrl = ctx.url ?? null;
       } catch { /* ignore */ }
+    }
+
+    // Phase 0 (ADR-023 FR-5): opt-in auto-scroll, AFTER every guard block decision
+    // (lens / auto-guard) so a denied action never mutates page state by scrolling
+    // (Codex P1). No-op when already in view or not requested.
+    if (scrollIntoView) {
+      await scrollSelectorIntoViewIfNeeded(effectiveSelector, effectiveTabId ?? null, port);
     }
 
     const coords = await getElementScreenCoords(
@@ -1223,6 +1277,47 @@ function safeCloneForTransport(value: unknown): unknown {
 
 // Phase 3: 'js' action implementation. Public dispatcher `browserEvalHandler`
 // (defined near the registration) routes here when args.action === "js".
+/**
+ * Phase 0 (ADR-023 FR-8): map a CDP per-command timeout thrown by evaluateInTab
+ * into a typed BrowserEvalTimeout with a wait_until hint. A long in-page poll
+ * inside a single eval always exhausts the CDP timeout; without this the raw
+ * message would classify() to the generic UiaTimeout (`_errors.ts:579`), which
+ * is misleading for an eval-polling failure.
+ *
+ * Keys off cdp-bridge's literal "CDP timeout:" prefix (`cdp-bridge.ts`
+ * session.send). The string contract spans two files with no compile-time
+ * guard, so it is pinned by tests/unit/browser-eval-timeout-typed-code.test.ts
+ * (Phase 0 review P2-1). The user-facing seconds value is derived from
+ * CMD_TIMEOUT_MS (single source, review P2-2). Returns null for any other error
+ * so the caller falls through to failWith.
+ */
+export function maybeBrowserEvalTimeoutFailure(
+  err: unknown,
+  tabId: string | undefined,
+  port: number,
+): ToolResult | null {
+  const msg = err instanceof Error ? err.message : String(err);
+  // Match the bridge's exact "CDP timeout:" prefix (cdp-bridge.ts session.send).
+  // A page-script error is wrapped as "JS exception in tab: ..." (cdp-bridge.ts),
+  // so a user expression that merely mentions "CDP timeout" is NOT mislabeled
+  // (Codex Round 2 P3 — prefix match, not substring).
+  if (!msg.startsWith("CDP timeout:")) return null;
+  return failCode(
+    "BrowserEvalTimeout",
+    `browser_eval hit the CDP per-command timeout (~${Math.round(CMD_TIMEOUT_MS / 1000)}s). ` +
+      "A single eval cannot run longer than that, so in-page polling loops will always time out here.",
+    {
+      suggest: [
+        "Do not poll inside browser_eval — one eval is bounded by the CDP per-command timeout.",
+        "To wait for a DOM element or text, use wait_until({condition:'element_matches', target:{by, pattern, scope}}).",
+        "To wait for an SPA route change, use wait_until({condition:'url_matches', target:{pattern}}).",
+        "To wait for page load, use wait_until({condition:'ready_state'}).",
+      ],
+      context: { tabId, port },
+    },
+  );
+}
+
 export const browserEvalJsHandler = async ({
   expression,
   tabId,
@@ -1268,7 +1363,18 @@ export const browserEvalJsHandler = async ({
     }
 
     const preparedExpression = prepareBrowserEvalExpression(expression);
-    const rawResult = await evaluateInTab(preparedExpression, tabId ?? null, port);
+    let rawResult: unknown;
+    try {
+      rawResult = await evaluateInTab(preparedExpression, tabId ?? null, port);
+    } catch (evalErr) {
+      // Phase 0 (ADR-023 FR-8): only the eval itself gets the BrowserEvalTimeout
+      // remap — a CDP timeout from post-eval work (e.g. getCachedTabContext) keeps
+      // its normal classification (Codex P2). Non-timeout eval errors re-throw to
+      // the outer catch.
+      const timeoutFailure = maybeBrowserEvalTimeoutFailure(evalErr, tabId, port);
+      if (timeoutFailure) return timeoutFailure;
+      throw evalErr;
+    }
 
     if (withPerception) {
       // Phase J: structured response mode — safeClone to avoid circular ref in transport
@@ -2348,7 +2454,13 @@ export const browserEvalSchema = z.discriminatedUnion("action", [
       "JavaScript expression to evaluate. " +
       "The server automatically wraps snippets in an async IIFE to avoid repeated const/let collisions. " +
       "For multi-statement snippets, use an explicit final return value. " +
-      "Declarations (const/let/var) are scoped per snippet — use window.* / globalThis.* for persistence."
+      "Declarations (const/let/var) are scoped per snippet — use window.* / globalThis.* for persistence. " +
+      // "~15s" mirrors CMD_TIMEOUT_MS (cdp-bridge.ts). Kept literal — this describe()
+      // runs at module load, and interpolating the imported const would break tests
+      // that vi.mock cdp-bridge without re-exporting it. The runtime failCode message
+      // (maybeBrowserEvalTimeoutFailure) derives the value from CMD_TIMEOUT_MS instead.
+      "A single eval is bounded by the CDP per-command timeout (~15s): do NOT write in-page polling loops here — " +
+      "use wait_until (element_matches / url_matches / ready_state) to wait for conditions instead."
     ),
     withPerception: coercedBoolean().optional().default(false).describe(
       "When true, return structured JSON {ok, result, post} with post.perception attached. Default false preserves raw-text return."
