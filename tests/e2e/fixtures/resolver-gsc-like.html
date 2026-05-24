@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ADR-023 resolver GSC-like fixture</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; }
+    /* Off-viewport nav drawer: links stay in the DOM and are "visible" by
+       computed style (display/visibility/opacity), but their center is off-screen
+       so document.elementFromPoint never hits them → receivesEvents=false. This
+       mirrors a GSC-style collapsed side nav whose links duplicate page actions. */
+    .drawer { position: fixed; left: -9999px; top: 0; width: 220px; }
+    .drawer a { display: block; padding: 8px; }
+    .main { padding: 16px; }
+    /* Dynamic-class-only button (no stable id/text selector would help) plus a
+       grab-bag of action shapes the resolver must disambiguate. */
+    button { display: block; margin: 8px 0; padding: 8px 16px; }
+    .overlay-host { position: relative; }
+    .overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.02); z-index: 10; }
+    label { display: block; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <nav class="drawer" role="navigation" aria-label="Side navigation">
+    <!-- Same text as the real button below, but off-viewport → not actionable. -->
+    <a href="#settings" class="drawer-link">Open Settings</a>
+    <a href="#save" class="drawer-link">Save</a>
+  </nav>
+
+  <main class="main" role="main">
+    <!-- Unique actionable target: a real, in-viewport button with a dynamic class. -->
+    <button id="real-settings" class="dyn-7f3a9c">Open Settings</button>
+
+    <!-- Ambiguous: two distinct, visible, in-viewport same-text buttons. -->
+    <button id="save-1">Save</button>
+    <button id="save-2">Save</button>
+
+    <!-- No strong clickable: plain text in a span, no interactive ancestor. -->
+    <span class="plain-label">Just a label Foobar</span>
+
+    <!-- Climb test: matched text lives in a child span; resolves to the button (depth 1). -->
+    <button id="composed-btn"><span class="inner">Compose Email</span></button>
+
+    <!-- Occluded: a higher z-index overlay covers the button center. -->
+    <div class="overlay-host">
+      <button id="covered-btn">Covered Action</button>
+      <div class="overlay"></div>
+    </div>
+
+    <!-- Inherited-disabled: button is :disabled via the fieldset, though its own
+         .disabled property is false → must be non-actionable. -->
+    <fieldset disabled>
+      <button id="fieldset-btn">Fieldset Action</button>
+    </fieldset>
+
+    <!-- Fill target: an input identified by aria-label. -->
+    <input id="email-input" type="text" aria-label="Email address" />
+  </main>
+</body>
+</html>
