@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.9.0] - 2026-05-24 — Browser tools can target by meaning (not just CSS selectors) and detect modal dialogs
 
 ### Added
 
