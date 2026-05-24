@@ -103,7 +103,7 @@ describe("ADR-023 Phase 1 PR2: buildActionCandidateFactsJs — gather tail (snap
     const js = buildActionCandidateFactsJs({ by: "ariaLabel", pattern: "Search", caseSensitive: false });
     expect(js).toContain("const N = 8;");                       // AMBIGUITY_CANDIDATE_CAP
     expect(js).toContain("const D = 3;");                       // CLIMB_MAX_DEPTH
-    expect(js).toContain("const top = filtered.slice(0, N);");
+    expect(js).toContain("const top = pool.slice(0, N);");      // top-N of the (role-filtered) pool
     expect(js).toContain("document.elementFromPoint(cx, cy)"); // receivesEvents hit-test
     expect(js).toContain("for (let d = 0; d <= D && node; d++)"); // self + D ancestors
     // window-level coord metrics (no second querySelector for click)
@@ -113,6 +113,14 @@ describe("ADR-023 Phase 1 PR2: buildActionCandidateFactsJs — gather tail (snap
     expect(js).toContain("chain: chainOf(el)");
     expect(js).toContain("nearestLabels: labelsOf(el)");
     expect(js).toContain("containerHint: hintOf(el)");
+  });
+
+  it("role filter: absent → roleFilter null + pool is filtered; present → lowercased role", () => {
+    const noRole = buildActionCandidateFactsJs({ by: "text", pattern: "Save", caseSensitive: false });
+    expect(noRole).toContain("const roleFilter = null;");
+    const withRole = buildActionCandidateFactsJs({ by: "text", pattern: "Save", role: "Button", caseSensitive: false });
+    expect(withRole).toContain('const roleFilter = "button";'); // lowercased
+    expect(withRole).toContain("filtered.filter(function(e) { return roleMatches(e.el); })");
   });
 
   it("shares the collection error returns (ScopeNotFound / Timeout) via the body", () => {

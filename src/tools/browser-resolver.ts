@@ -15,6 +15,8 @@
  * Plan: desktop-touch-mcp-internal:docs/adr-023-phase-1-resolver-plan.md S1/S7.
  */
 
+import { evaluateInTab } from "../engine/cdp-bridge.js";
+
 export interface CandidateCollectionArgs {
   by: "text" | "regex" | "role" | "ariaLabel" | "selector";
   pattern: string;
@@ -32,6 +34,13 @@ export interface ActionFactsArgs {
   pattern: string;
   scope?: string;
   caseSensitive: boolean;
+  /**
+   * Optional ARIA/implicit-role filter combined (AND) with the by-axis match —
+   * `browser_click({by:'text', pattern:'Save', role:'button'})` keeps only Save
+   * matches whose role is button. Applied to the full sorted match set before the
+   * top-N cap, so the count + candidates reflect the role-filtered pool.
+   */
+  role?: string;
 }
 
 /**
@@ -277,7 +286,7 @@ export function buildCandidateCollectionJs(args: CandidateCollectionArgs): strin
  * ScopeNotFound / InvalidRegex / Timeout. Pinned by snapshot.
  */
 export function buildActionCandidateFactsJs(args: ActionFactsArgs): string {
-  const { by, pattern, scope, caseSensitive } = args;
+  const { by, pattern, scope, caseSensitive, role } = args;
   // maxResults/offset are unused by the gather tail (it takes top-N of the full
   // sorted set); fixed values keep the shared body's interpolation total. The
   // resolver always collects visible elements and lets receivesEvents gate the
@@ -286,7 +295,25 @@ export function buildActionCandidateFactsJs(args: ActionFactsArgs): string {
   // ── ADR-023 Phase 1 PR2: action-target fact gathering (top-N only, §2.bis). ──
   const N = ${AMBIGUITY_CANDIDATE_CAP};
   const D = ${CLIMB_MAX_DEPTH};
-  const top = filtered.slice(0, N);
+
+  // Optional role filter (AND with the by-axis match) applied BEFORE the top-N
+  // cap so total/candidates reflect the role-filtered pool (plan §S4 role combine).
+  const roleFilter = ${role ? JSON.stringify(role.toLowerCase()) : "null"};
+  function roleMatches(el) {
+    const explicit = (el.getAttribute('role') || '').toLowerCase();
+    if (explicit === roleFilter) return true;
+    const tg = el.tagName.toLowerCase();
+    const ty = (el.getAttribute('type') || '').toLowerCase();
+    if (roleFilter === 'button') return tg === 'button' || (tg === 'input' && /^(button|submit|reset)$/.test(ty));
+    if (roleFilter === 'link') return tg === 'a' && el.hasAttribute('href');
+    if (roleFilter === 'textbox') return tg === 'textarea' || (tg === 'input' && !/^(button|submit|reset|checkbox|radio|range|color|file|image|hidden)$/.test(ty));
+    if (roleFilter === 'checkbox') return tg === 'input' && ty === 'checkbox';
+    if (roleFilter === 'radio') return tg === 'input' && ty === 'radio';
+    if (roleFilter === 'heading') return /^h[1-6]$/.test(tg);
+    return false;
+  }
+  const pool = roleFilter ? filtered.filter(function(e) { return roleMatches(e.el); }) : filtered;
+  const top = pool.slice(0, N);
 
   // Physical-coord conversion constants (getElementScreenCoords formula,
   // cdp-bridge.ts) — computed once so browser_click({by}) converts the resolved
@@ -395,7 +422,7 @@ export function buildActionCandidateFactsJs(args: ActionFactsArgs): string {
   });
 
   return {
-    total: filtered.length,
+    total: pool.length,
     returned: factsList.length,
     viewport: { screenX: sx, screenY: sy, dpr: dpr, chromeH: chromeH, chromeW: chromeW, innerWidth: window.innerWidth, innerHeight: window.innerHeight },
     candidates: factsList,
@@ -697,4 +724,93 @@ export function decideActionTarget(
     return { kind: "noActionable", total: totalMatches, returned, truncated, candidates, next: [...NO_ACTIONABLE_NEXT_HINTS] };
   }
   return { kind: "ambiguous", total: totalMatches, returned, truncated, candidates, next: [...AMBIGUITY_NEXT_HINTS] };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// resolveActionTarget — the impure wrapper (gather eval → pure decide).
+//
+// browser_click({by}) / browser_fill({by}) call this. It runs the fact-gather
+// IIFE in the tab (the ONLY DOM access), then hands the facts to the pure
+// decideActionTarget. On `resolved` it converts the resolved viewport rect to a
+// physical screen point using the same-eval viewport metrics — so the click
+// caller never issues a second querySelector (ADR §1.2 D1: no re-non-uniqueness).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ResolveActionArgs {
+  by: "text" | "regex" | "role" | "ariaLabel" | "selector";
+  pattern: string;
+  /** optional ARIA/implicit-role filter, AND-combined with the by-axis match */
+  role?: string;
+  scope?: string;
+  caseSensitive?: boolean;
+  /** click gates on receivesEvents; fill does not (acts via CDP eval, §S5) */
+  action: "click" | "fill";
+  tabId?: string | null;
+  port: number;
+}
+
+export type ResolveActionOutcome =
+  | {
+      kind: "resolved";
+      index: number;
+      /** resolved clickable's viewport rect (CSS px) */
+      rect: RectXYWH;
+      /** physical screen point (device px), ready for an OS mouse click */
+      physical: { x: number; y: number };
+      /** 0 = matched element, 1..D = ancestor distance climbed */
+      climbDepth: number;
+      viewport: ViewportMetrics;
+    }
+  | { kind: "ambiguous"; total: number; returned: number; truncated: boolean; candidates: AmbiguityCandidate[]; next: string[] }
+  | { kind: "noActionable"; total: number; returned: number; truncated: boolean; candidates: AmbiguityCandidate[]; next: string[] }
+  /** gather-time failure surfaced by the shared body (ScopeNotFound / InvalidRegex / Timeout) */
+  | { kind: "error"; code: string; message?: string };
+
+/**
+ * Convert a viewport rect's CENTER to a physical screen point using the gather
+ * eval's window metrics — the getElementScreenCoords formula (cdp-bridge.ts),
+ * computed once at gather time. Center-based so it matches the actionability
+ * hit-test (`receivesEvents` = elementFromPoint(center)).
+ */
+export function physicalPoint(rect: RectXYWH, vp: ViewportMetrics): { x: number; y: number } {
+  const cx = rect.x + rect.w / 2;
+  const cy = rect.y + rect.h / 2;
+  return {
+    x: Math.round((vp.screenX + vp.chromeW + cx) * vp.dpr),
+    y: Math.round((vp.screenY + vp.chromeH + cy) * vp.dpr),
+  };
+}
+
+/**
+ * Resolve a semantic (by-axis) target to a single actionable element, or an
+ * ambiguity / no-actionable / error outcome. One gather eval + a pure decision.
+ */
+export async function resolveActionTarget(args: ResolveActionArgs): Promise<ResolveActionOutcome> {
+  const expr = buildActionCandidateFactsJs({
+    by: args.by,
+    pattern: args.pattern,
+    scope: args.scope,
+    caseSensitive: args.caseSensitive ?? false,
+    role: args.role,
+  });
+  const raw = await evaluateInTab(expr, args.tabId ?? null, args.port);
+  if (raw && typeof raw === "object" && "__error" in (raw as object)) {
+    const e = raw as GatherError;
+    return { kind: "error", code: e.__error, message: e.message };
+  }
+  const gathered = raw as GatheredFacts;
+  const decision = decideActionTarget(gathered.candidates, gathered.total, {
+    requireReceivesEvents: args.action !== "fill",
+  });
+  if (decision.kind === "resolved") {
+    return {
+      kind: "resolved",
+      index: decision.target.index,
+      rect: decision.target.rect,
+      physical: physicalPoint(decision.target.rect, gathered.viewport),
+      climbDepth: decision.target.climbDepth,
+      viewport: gathered.viewport,
+    };
+  }
+  return decision;
 }

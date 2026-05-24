@@ -369,7 +369,25 @@ exports[`ADR-023 Phase 1 PR2: buildActionCandidateFactsJs — gather tail (snaps
   // ── ADR-023 Phase 1 PR2: action-target fact gathering (top-N only, §2.bis). ──
   const N = 8;
   const D = 3;
-  const top = filtered.slice(0, N);
+
+  // Optional role filter (AND with the by-axis match) applied BEFORE the top-N
+  // cap so total/candidates reflect the role-filtered pool (plan §S4 role combine).
+  const roleFilter = null;
+  function roleMatches(el) {
+    const explicit = (el.getAttribute('role') || '').toLowerCase();
+    if (explicit === roleFilter) return true;
+    const tg = el.tagName.toLowerCase();
+    const ty = (el.getAttribute('type') || '').toLowerCase();
+    if (roleFilter === 'button') return tg === 'button' || (tg === 'input' && /^(button|submit|reset)$/.test(ty));
+    if (roleFilter === 'link') return tg === 'a' && el.hasAttribute('href');
+    if (roleFilter === 'textbox') return tg === 'textarea' || (tg === 'input' && !/^(button|submit|reset|checkbox|radio|range|color|file|image|hidden)$/.test(ty));
+    if (roleFilter === 'checkbox') return tg === 'input' && ty === 'checkbox';
+    if (roleFilter === 'radio') return tg === 'input' && ty === 'radio';
+    if (roleFilter === 'heading') return /^h[1-6]$/.test(tg);
+    return false;
+  }
+  const pool = roleFilter ? filtered.filter(function(e) { return roleMatches(e.el); }) : filtered;
+  const top = pool.slice(0, N);
 
   // Physical-coord conversion constants (getElementScreenCoords formula,
   // cdp-bridge.ts) — computed once so browser_click({by}) converts the resolved
@@ -478,7 +496,7 @@ exports[`ADR-023 Phase 1 PR2: buildActionCandidateFactsJs — gather tail (snaps
   });
 
   return {
-    total: filtered.length,
+    total: pool.length,
     returned: factsList.length,
     viewport: { screenX: sx, screenY: sy, dpr: dpr, chromeH: chromeH, chromeW: chromeW, innerWidth: window.innerWidth, innerHeight: window.innerHeight },
     candidates: factsList,
