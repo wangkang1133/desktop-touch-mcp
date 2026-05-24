@@ -792,12 +792,17 @@ async function handleBrowserFillByAxis(args: {
   if (outcome.kind === "error") return browserResolveErrorToFailure(outcome, "browser_fill", ctx);
   if (outcome.kind !== "resolved") return browserResolveStopToFailure(outcome, "browser_fill", ctx);
 
-  // Resolved → act (2nd eval): re-gather the same pool, re-select top[index],
-  // climb to the resolved element, fill via the native setter. No second
-  // querySelector / coordinate re-find (avoids re-non-uniqueness / occlusion).
-  const actExpr = buildFillActJs({ by, pattern, role, scope, caseSensitive: caseSensitive ?? false }, outcome.index, outcome.climbDepth, value);
+  // Resolved → act (2nd eval): re-gather the same pool, verify the matched
+  // element's identity is unchanged (Codex P1 — never silently mis-fill a field
+  // the DOM moved under us), re-select top[index], climb, fill via the native
+  // setter. No second querySelector / coordinate re-find (avoids re-non-uniqueness
+  // / occlusion).
+  const actExpr = buildFillActJs(
+    { by, pattern, role, scope, caseSensitive: caseSensitive ?? false },
+    outcome.index, outcome.climbDepth, value, outcome.matched,
+  );
   const actResult = await evaluateInTab(actExpr, tabId ?? null, port) as
-    { ok: boolean; error?: string; tag?: string; actual?: string; fullActualLen?: number; fullMatches?: boolean };
+    { ok: boolean; error?: string; detail?: string; tag?: string; actual?: string; fullActualLen?: number; fullMatches?: boolean };
 
   if (!actResult.ok) {
     if (actResult.error === "not_fillable") {
@@ -813,11 +818,12 @@ async function handleBrowserFillByAxis(args: {
         },
       );
     }
-    // index_out_of_range / resolved_element_lost: the DOM changed between the
-    // resolve gather and the act re-gather.
+    // identity_changed / index_out_of_range / resolved_element_lost: the DOM
+    // mutated between the resolve gather and the act re-gather — fail WITHOUT
+    // writing so we never fill the wrong field.
     return failCode(
       "ToolError",
-      `browser_fill: the page changed between resolving and filling (${actResult.error ?? "unknown"}).`,
+      `browser_fill: the page changed between resolving and filling (${actResult.error ?? "unknown"}${actResult.detail ? ": " + actResult.detail : ""}) — not filled.`,
       { suggest: ["Retry — the resolver re-resolves against the current DOM"], context: ctx },
     );
   }

@@ -465,11 +465,32 @@ export function buildActionCandidateFactsJs(args: ActionFactsArgs): string {
  * `{ ok:true, actual, fullActualLen, fullMatches }` or `{ ok:false, error }`
  * (index_out_of_range / resolved_element_lost / not_fillable). Pinned by snapshot.
  */
-export function buildFillActJs(args: ActionFactsArgs, index: number, climbDepth: number, value: string): string {
+export function buildFillActJs(
+  args: ActionFactsArgs,
+  index: number,
+  climbDepth: number,
+  value: string,
+  expect: { name: string; role: string | null; ariaLabel: string | null; tag: string; total: number },
+): string {
   return `${candidatePoolJs(args)}
   // ── ADR-023 Phase 1 PR4: by-axis fill ACT (deterministic re-gather + index). ──
+  // IDENTITY GATE (Codex P1): the re-gather assumes the DOM is unchanged since the
+  // resolve eval. If it mutated (a matching field inserted/removed/reordered),
+  // top[index] could be a DIFFERENT field — a silent mis-fill. Verify the matched
+  // element's identity (pool count + name/role/ariaLabel/tag of top[index] before
+  // climb) against what resolve saw; on mismatch fail (the agent re-resolves) and
+  // NEVER write.
+  if (pool.length !== ${expect.total}) return { ok: false, error: 'identity_changed', detail: 'candidate_count' };
   if (top.length <= ${index}) return { ok: false, error: 'index_out_of_range' };
-  let el = top[${index}].el;
+  const matched = top[${index}].el;
+  const mName = elText(matched);
+  const mRole = matched.getAttribute('role') || null;
+  const mAria = matched.getAttribute('aria-label') || null;
+  const mTag = matched.tagName.toLowerCase();
+  if (mName !== ${JSON.stringify(expect.name)} || mRole !== ${JSON.stringify(expect.role)} || mAria !== ${JSON.stringify(expect.ariaLabel)} || mTag !== ${JSON.stringify(expect.tag)}) {
+    return { ok: false, error: 'identity_changed', detail: 'signature' };
+  }
+  let el = matched;
   for (let d = 0; d < ${climbDepth} && el; d++) el = el.parentElement;
   if (!el) return { ok: false, error: 'resolved_element_lost' };
 
@@ -839,6 +860,14 @@ export type ResolveActionOutcome =
       /** 0 = matched element, 1..D = ancestor distance climbed */
       climbDepth: number;
       viewport: ViewportMetrics;
+      /**
+       * Identity of the MATCHED element (chain[0], i.e. top[index] before climb) +
+       * the candidate-pool total. A by-axis fill re-gathers in a 2nd eval and must
+       * verify this identity still holds at top[index] before writing — otherwise a
+       * DOM mutation between resolve and act could silently mis-fill a different
+       * field (Codex PR4 P1). Click does not need it (it acts by physical coords).
+       */
+      matched: { name: string; role: string | null; ariaLabel: string | null; tag: string; total: number };
     }
   | { kind: "ambiguous"; total: number; returned: number; truncated: boolean; candidates: AmbiguityCandidate[]; next: string[] }
   | { kind: "noActionable"; total: number; returned: number; truncated: boolean; candidates: AmbiguityCandidate[]; next: string[] }
@@ -902,6 +931,11 @@ export async function resolveBrowserActionTarget(args: ResolveActionArgs): Promi
     requireReceivesEvents: args.action !== "fill",
   });
   if (decision.kind === "resolved") {
+    // Identity of the matched element (chain[0] = top[index] before climb) so a
+    // by-axis fill can verify the 2nd-eval re-gather still points at the same
+    // field before writing (Codex PR4 P1). decideActionTarget.target.index is a
+    // facts index, so gathered.candidates[index] is that matched candidate.
+    const f = gathered.candidates[decision.target.index];
     return {
       kind: "resolved",
       index: decision.target.index,
@@ -909,6 +943,13 @@ export async function resolveBrowserActionTarget(args: ResolveActionArgs): Promi
       physical: physicalPoint(decision.target.rect, gathered.viewport),
       climbDepth: decision.target.climbDepth,
       viewport: gathered.viewport,
+      matched: {
+        name: f?.name ?? "",
+        role: f?.role ?? null,
+        ariaLabel: f?.ariaLabel ?? null,
+        tag: f?.chain?.[0]?.tag ?? "",
+        total: gathered.total,
+      },
     };
   }
   return decision;

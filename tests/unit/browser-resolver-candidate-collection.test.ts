@@ -132,14 +132,16 @@ describe("ADR-023 Phase 1 PR2: buildActionCandidateFactsJs — gather tail (snap
   });
 });
 
+const EXPECT = { name: "Email address", role: null, ariaLabel: "Email address", tag: "input", total: 1 };
+
 describe("ADR-023 Phase 1 PR4: buildFillActJs — by-axis fill act (snapshot)", () => {
   it("emits the full fill-act IIFE for a representative by:ariaLabel target (snapshot)", () => {
-    const js = buildFillActJs({ by: "ariaLabel", pattern: "Email address", caseSensitive: false }, 0, 0, "user@example.com");
+    const js = buildFillActJs({ by: "ariaLabel", pattern: "Email address", caseSensitive: false }, 0, 0, "user@example.com", EXPECT);
     expect(js).toMatchSnapshot();
   });
 
   it("reuses the shared candidate pool (same matching body + role filter + top-N)", () => {
-    const js = buildFillActJs({ by: "ariaLabel", pattern: "X", role: "textbox", caseSensitive: false }, 0, 0, "v");
+    const js = buildFillActJs({ by: "ariaLabel", pattern: "X", role: "textbox", caseSensitive: false }, 0, 0, "v", EXPECT);
     for (const frag of [
       "filtered.sort((a, b) =>",          // shared matching body
       "const top = pool.slice(0, N);",    // shared pool fragment
@@ -150,10 +152,23 @@ describe("ADR-023 Phase 1 PR4: buildFillActJs — by-axis fill act (snapshot)", 
     }
   });
 
+  it("identity gate (Codex P1): verifies pool count + matched signature before writing", () => {
+    const js = buildFillActJs(
+      { by: "ariaLabel", pattern: "X", caseSensitive: false }, 2, 1, "hi",
+      { name: "Email address", role: null, ariaLabel: "Email address", tag: "input", total: 3 },
+    );
+    expect(js).toContain("if (pool.length !== 3) return { ok: false, error: 'identity_changed', detail: 'candidate_count' };");
+    expect(js).toContain('if (mName !== "Email address" || mRole !== null || mAria !== "Email address" || mTag !== "input")');
+    expect(js).toContain("error: 'identity_changed', detail: 'signature'");
+    // the gate runs BEFORE any focus/setter write
+    expect(js.indexOf("identity_changed")).toBeLessThan(js.indexOf("descriptor.set.call(el, val)"));
+  });
+
   it("act tail: re-select top[index], climb climbDepth, fillable gate, native setter + events", () => {
-    const js = buildFillActJs({ by: "ariaLabel", pattern: "X", caseSensitive: false }, 2, 1, "hi");
+    const js = buildFillActJs({ by: "ariaLabel", pattern: "X", caseSensitive: false }, 2, 1, "hi", EXPECT);
     expect(js).toContain("if (top.length <= 2) return { ok: false, error: 'index_out_of_range' };");
-    expect(js).toContain("let el = top[2].el;");
+    expect(js).toContain("const matched = top[2].el;");
+    expect(js).toContain("let el = matched;");
     expect(js).toContain("for (let d = 0; d < 1 && el; d++) el = el.parentElement;");
     expect(js).toContain("const isTextInput = tag === 'INPUT' && !/^(button|submit|reset|checkbox|radio|range|color|file|image|hidden)$/.test(ty);");
     expect(js).toContain("el.isContentEditable === true");
@@ -165,7 +180,7 @@ describe("ADR-023 Phase 1 PR4: buildFillActJs — by-axis fill act (snapshot)", 
   });
 
   it("JSON-encodes the value (escapes embedded quotes) and interpolates index/climbDepth as numbers", () => {
-    const js = buildFillActJs({ by: "ariaLabel", pattern: "X", caseSensitive: false }, 0, 0, 'a"b');
+    const js = buildFillActJs({ by: "ariaLabel", pattern: "X", caseSensitive: false }, 0, 0, 'a"b', EXPECT);
     expect(js).toContain('const val = "a\\"b";');
   });
 });

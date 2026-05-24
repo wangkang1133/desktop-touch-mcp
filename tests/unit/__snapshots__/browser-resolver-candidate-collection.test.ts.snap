@@ -705,8 +705,23 @@ exports[`ADR-023 Phase 1 PR4: buildFillActJs — by-axis fill act (snapshot) > e
   const pool = roleFilter ? filtered.filter(function(e) { return roleMatches(e.el); }) : filtered;
   const top = pool.slice(0, N);
   // ── ADR-023 Phase 1 PR4: by-axis fill ACT (deterministic re-gather + index). ──
+  // IDENTITY GATE (Codex P1): the re-gather assumes the DOM is unchanged since the
+  // resolve eval. If it mutated (a matching field inserted/removed/reordered),
+  // top[index] could be a DIFFERENT field — a silent mis-fill. Verify the matched
+  // element's identity (pool count + name/role/ariaLabel/tag of top[index] before
+  // climb) against what resolve saw; on mismatch fail (the agent re-resolves) and
+  // NEVER write.
+  if (pool.length !== 1) return { ok: false, error: 'identity_changed', detail: 'candidate_count' };
   if (top.length <= 0) return { ok: false, error: 'index_out_of_range' };
-  let el = top[0].el;
+  const matched = top[0].el;
+  const mName = elText(matched);
+  const mRole = matched.getAttribute('role') || null;
+  const mAria = matched.getAttribute('aria-label') || null;
+  const mTag = matched.tagName.toLowerCase();
+  if (mName !== "Email address" || mRole !== null || mAria !== "Email address" || mTag !== "input") {
+    return { ok: false, error: 'identity_changed', detail: 'signature' };
+  }
+  let el = matched;
   for (let d = 0; d < 0 && el; d++) el = el.parentElement;
   if (!el) return { ok: false, error: 'resolved_element_lost' };
 
