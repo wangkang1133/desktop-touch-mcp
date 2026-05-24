@@ -285,14 +285,24 @@ export function buildCandidateCollectionJs(args: CandidateCollectionArgs): strin
  * candidates: CandidateFacts[] }` or the shared `{ __error }` shape on
  * ScopeNotFound / InvalidRegex / Timeout. Pinned by snapshot.
  */
-export function buildActionCandidateFactsJs(args: ActionFactsArgs): string {
+/**
+ * Shared injected-JS fragment: candidate matching body + score-desc top-N pool
+ * (role-filtered). Emits through `const top = pool.slice(0, N)`, leaving
+ * `filtered` / `matchScore` / `matchedByMap` / `N` / `D` / `pool` / `top` in
+ * scope. Both the gather builder (buildActionCandidateFactsJs) and the fill-act
+ * builder (buildFillActJs) embed this verbatim then append their own tail — a
+ * single source for the role filter + top-N cap. Re-running it in the fill-act
+ * eval re-selects the SAME top[index] deterministically (same querySelectorAll
+ * order + scoring), so by-axis fill needs no selector/coordinate re-identification
+ * (avoids re-non-uniqueness; plan §S5).
+ */
+function candidatePoolJs(args: ActionFactsArgs): string {
   const { by, pattern, scope, caseSensitive, role } = args;
-  // maxResults/offset are unused by the gather tail (it takes top-N of the full
-  // sorted set); fixed values keep the shared body's interpolation total. The
-  // resolver always collects visible elements and lets receivesEvents gate the
-  // viewport (so off-viewport candidates fall out as non-actionable, not unseen).
+  // maxResults/offset are unused by the tails (they take top-N of the full sorted
+  // set); fixed values keep the shared body's interpolation total. The resolver
+  // always collects visible elements and lets receivesEvents gate the viewport.
   return `${candidateMatchingBodyJs({ by, pattern, scope, maxResults: 200, offset: 0, visibleOnly: true, inViewportOnly: false, caseSensitive })}
-  // ── ADR-023 Phase 1 PR2: action-target fact gathering (top-N only, §2.bis). ──
+  // ── ADR-023 Phase 1: action-target candidate pool (top-N, role-filtered). ──
   const N = ${AMBIGUITY_CANDIDATE_CAP};
   const D = ${CLIMB_MAX_DEPTH};
 
@@ -313,7 +323,11 @@ export function buildActionCandidateFactsJs(args: ActionFactsArgs): string {
     return false;
   }
   const pool = roleFilter ? filtered.filter(function(e) { return roleMatches(e.el); }) : filtered;
-  const top = pool.slice(0, N);
+  const top = pool.slice(0, N);`;
+}
+
+export function buildActionCandidateFactsJs(args: ActionFactsArgs): string {
+  return `${candidatePoolJs(args)}
 
   // Physical-coord conversion constants (getElementScreenCoords formula,
   // cdp-bridge.ts) — computed once so browser_click({by}) converts the resolved
@@ -431,6 +445,88 @@ export function buildActionCandidateFactsJs(args: ActionFactsArgs): string {
     viewport: { screenX: sx, screenY: sy, dpr: dpr, chromeH: chromeH, chromeW: chromeW, innerWidth: window.innerWidth, innerHeight: window.innerHeight },
     candidates: factsList,
   };
+})()
+`;
+}
+
+/**
+ * Build the injected-JS IIFE that ACTS on a by-axis fill target (browser_fill
+ * by-axis, plan §S5 — the 2nd eval: gather→decide ran in node, this acts). It
+ * re-runs the SAME candidate matching/pool as the gather eval (deterministic —
+ * identical querySelectorAll order + scoring), re-selects `top[index]`, climbs
+ * `climbDepth` ancestors to the resolved element, verifies it is fillable
+ * (input / textarea / contenteditable), focuses it, sets the value via the native
+ * prototype setter + dispatches InputEvent/'change' (React/Vue-compatible — the
+ * same path as the selector fill), and reads `element.value` back.
+ *
+ * Re-gather+index is used (NOT a fresh querySelector or an elementFromPoint
+ * coordinate re-find) so a GSC dynamic class cannot re-match differently
+ * (re-non-uniqueness) and an overlay cannot be mis-targeted (occlusion). Returns
+ * `{ ok:true, actual, fullActualLen, fullMatches }` or `{ ok:false, error }`
+ * (index_out_of_range / resolved_element_lost / not_fillable). Pinned by snapshot.
+ */
+export function buildFillActJs(
+  args: ActionFactsArgs,
+  index: number,
+  climbDepth: number,
+  value: string,
+  expect: { name: string; role: string | null; ariaLabel: string | null; tag: string; total: number },
+): string {
+  return `${candidatePoolJs(args)}
+  // ── ADR-023 Phase 1 PR4: by-axis fill ACT (deterministic re-gather + index). ──
+  // IDENTITY GATE (Codex P1): the re-gather assumes the DOM is unchanged since the
+  // resolve eval. If it mutated (a matching field inserted/removed/reordered),
+  // top[index] could be a DIFFERENT field — a silent mis-fill. Verify the matched
+  // element's identity (pool count + name/role/ariaLabel/tag of top[index] before
+  // climb) against what resolve saw; on mismatch fail (the agent re-resolves) and
+  // NEVER write.
+  if (pool.length !== ${expect.total}) return { ok: false, error: 'identity_changed', detail: 'candidate_count' };
+  if (top.length <= ${index}) return { ok: false, error: 'index_out_of_range' };
+  const matched = top[${index}].el;
+  const mName = elText(matched);
+  const mRole = matched.getAttribute('role') || null;
+  const mAria = matched.getAttribute('aria-label') || null;
+  const mTag = matched.tagName.toLowerCase();
+  if (mName !== ${JSON.stringify(expect.name)} || mRole !== ${JSON.stringify(expect.role)} || mAria !== ${JSON.stringify(expect.ariaLabel)} || mTag !== ${JSON.stringify(expect.tag)}) {
+    return { ok: false, error: 'identity_changed', detail: 'signature' };
+  }
+  let el = matched;
+  for (let d = 0; d < ${climbDepth} && el; d++) el = el.parentElement;
+  if (!el) return { ok: false, error: 'resolved_element_lost' };
+
+  const tag = el.tagName;
+  const ty = (el.getAttribute('type') || '').toLowerCase();
+  // Text-entry controls only. Exclude non-text input types (Codex P1): type=file
+  // THROWS on a non-empty .value assignment; checkbox/radio/button/submit/reset/
+  // image/range/color/hidden ignore a value string (a false-positive "filled") or
+  // are not text targets. Same exclusion as the 'textbox' role filter.
+  const isTextInput = tag === 'INPUT' && !/^(button|submit|reset|checkbox|radio|range|color|file|image|hidden)$/.test(ty);
+  const isTextArea = tag === 'TEXTAREA';
+  const isEditable = el.isContentEditable === true;
+  if (!isTextInput && !isTextArea && !isEditable) {
+    return { ok: false, error: 'not_fillable', tag: tag.toLowerCase() + (ty ? '[type=' + ty + ']' : '') };
+  }
+
+  el.focus();
+  const val = ${JSON.stringify(value)};
+  if (isTextInput || isTextArea) {
+    if (typeof el.select === 'function') el.select();
+    let proto = null;
+    if (tag === 'INPUT') proto = HTMLInputElement.prototype;
+    else if (tag === 'TEXTAREA') proto = HTMLTextAreaElement.prototype;
+    const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
+    if (descriptor && descriptor.set) descriptor.set.call(el, val);
+    else el.value = val;
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: val }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    const fullActual = el.value !== undefined ? el.value : '';
+    return { ok: true, actual: (fullActual || '').slice(0, 100), fullActualLen: fullActual.length, fullMatches: fullActual === val };
+  }
+  // contenteditable
+  el.textContent = val;
+  el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: val }));
+  const fullActual = el.textContent || '';
+  return { ok: true, actual: (fullActual || '').slice(0, 100), fullActualLen: fullActual.length, fullMatches: fullActual === val };
 })()
 `;
 }
@@ -764,6 +860,14 @@ export type ResolveActionOutcome =
       /** 0 = matched element, 1..D = ancestor distance climbed */
       climbDepth: number;
       viewport: ViewportMetrics;
+      /**
+       * Identity of the MATCHED element (chain[0], i.e. top[index] before climb) +
+       * the candidate-pool total. A by-axis fill re-gathers in a 2nd eval and must
+       * verify this identity still holds at top[index] before writing — otherwise a
+       * DOM mutation between resolve and act could silently mis-fill a different
+       * field (Codex PR4 P1). Click does not need it (it acts by physical coords).
+       */
+      matched: { name: string; role: string | null; ariaLabel: string | null; tag: string; total: number };
     }
   | { kind: "ambiguous"; total: number; returned: number; truncated: boolean; candidates: AmbiguityCandidate[]; next: string[] }
   | { kind: "noActionable"; total: number; returned: number; truncated: boolean; candidates: AmbiguityCandidate[]; next: string[] }
@@ -827,6 +931,11 @@ export async function resolveBrowserActionTarget(args: ResolveActionArgs): Promi
     requireReceivesEvents: args.action !== "fill",
   });
   if (decision.kind === "resolved") {
+    // Identity of the matched element (chain[0] = top[index] before climb) so a
+    // by-axis fill can verify the 2nd-eval re-gather still points at the same
+    // field before writing (Codex PR4 P1). decideActionTarget.target.index is a
+    // facts index, so gathered.candidates[index] is that matched candidate.
+    const f = gathered.candidates[decision.target.index];
     return {
       kind: "resolved",
       index: decision.target.index,
@@ -834,6 +943,13 @@ export async function resolveBrowserActionTarget(args: ResolveActionArgs): Promi
       physical: physicalPoint(decision.target.rect, gathered.viewport),
       climbDepth: decision.target.climbDepth,
       viewport: gathered.viewport,
+      matched: {
+        name: f?.name ?? "",
+        role: f?.role ?? null,
+        ariaLabel: f?.ariaLabel ?? null,
+        tag: f?.chain?.[0]?.tag ?? "",
+        total: gathered.total,
+      },
     };
   }
   return decision;

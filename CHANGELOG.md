@@ -4,6 +4,19 @@
 
 ### Added
 
+- **`browser_fill` can target inputs by meaning, not just CSS selectors.** Like
+  `browser_click`, you can now pass `by` + `pattern` instead of a `selector` to
+  fill a field by what identifies it — most useful with `by:'ariaLabel'`
+  (`browser_fill({by:'ariaLabel', pattern:'Email address', value:'a@b.com'})`).
+  The server resolves to a **single** field and fills it through the same
+  React/Vue-compatible path as selector mode (native setter + input/change
+  events, with post-fill value verification). It refuses to guess: when several
+  fields match it stops with `code:'BrowserAmbiguousTarget'` (candidate list +
+  hints); when the match resolves to something that is not a fillable
+  input/textarea/contenteditable it stops with `code:'BrowserNoActionableTarget'`.
+  Optionally add `role` and `scope` to narrow. Provide EITHER `selector` OR
+  `by`+`pattern` (not both); selector mode is unchanged.
+
 - **`browser_click` can target elements by meaning, not just CSS selectors.**
   Instead of a `selector`, you can now pass `by` + `pattern` to click an element
   by what it *is* — handy for dynamic-class single-page apps where stable CSS
