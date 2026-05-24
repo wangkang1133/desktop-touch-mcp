@@ -21,16 +21,19 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mouseClickHandler, mouseDragHandler } from "../../src/tools/mouse.js";
-import { findBlankDesktopPoint } from "./helpers/blank-point.js";
+import { spawnBlankWindow } from "./helpers/blank-window.js";
 
-// Target a SCANNED blank desktop spot (over the wallpaper, no window there)
-// instead of guessing a "probably empty" coordinate like (50,50) or (960,540).
-// This is exactly the "click that hits nothing" the silent-fail pin needs, and
-// it avoids carelessly clicking/dragging on whatever real window happens to sit
-// at a hardcoded coordinate. Skip when the screen is fully covered.
-const BLANK = findBlankDesktopPoint();
+// Click/drag a dedicated, empty throwaway window instead of guessing a "probably
+// empty" coordinate like (50,50) or (960,540). The blank window's empty client
+// area is exactly the "action that hits nothing" the silent-fail pin needs (no
+// UIA children to mutate -> focus_only), and it never clicks/drags on a real
+// window or the desktop/Recycle Bin. Skip only if the window cannot be spawned.
+// Closed ONCE at file scope (a per-describe afterAll would close it before the
+// second describe runs, leaving its clicks to land on the desktop).
+const blank = await spawnBlankWindow();
+afterAll(() => blank?.close());
 
-describe.skipIf(BLANK === null)("mouse_click verifyDelivery hint (issue #178)", () => {
+describe.skipIf(blank === null)("mouse_click verifyDelivery hint (issue #178)", () => {
   let prevAutoGuard: string | undefined;
   beforeAll(() => {
     // Disable auto-guard so blank-area clicks don't get filtered by
@@ -46,9 +49,9 @@ describe.skipIf(BLANK === null)("mouse_click verifyDelivery hint (issue #178)", 
 
   it("returns hints.verifyDelivery when verifyDelivery=true (default)", async () => {
     const result = await mouseClickHandler({
-      // Scanned blank desktop spot — no window there, so this click hits nothing.
-      x: BLANK!.x,
-      y: BLANK!.y,
+      // Blank window's empty client area — this click hits nothing actionable.
+      x: blank!.point.x,
+      y: blank!.point.y,
       button: "left",
       doubleClick: false,
       tripleClick: false,
@@ -72,9 +75,9 @@ describe.skipIf(BLANK === null)("mouse_click verifyDelivery hint (issue #178)", 
 
   it("does NOT include verifyDelivery hint when verifyDelivery=false", async () => {
     const result = await mouseClickHandler({
-      // Scanned blank desktop spot — no window there, so this click hits nothing.
-      x: BLANK!.x,
-      y: BLANK!.y,
+      // Blank window's empty client area — this click hits nothing actionable.
+      x: blank!.point.x,
+      y: blank!.point.y,
       button: "left",
       doubleClick: false,
       tripleClick: false,
@@ -91,23 +94,19 @@ describe.skipIf(BLANK === null)("mouse_click verifyDelivery hint (issue #178)", 
   }, 10_000);
 
   it("blank-area click returns 'focus_only' or 'unverifiable' (silent fail pin)", async () => {
-    // Click in the extreme top-left desktop area — there's typically no
-    // actionable target there. Pre/post UIA observations should be identical
-    // (stable desktop element), giving 'focus_only' when UIA is available.
-    // On hosts without UIA the snapshot returns null and we expect
-    // 'unverifiable'.
+    // Click the blank window's empty client area — there is no actionable target
+    // there. Pre/post UIA observations are identical (an empty form has no
+    // children to mutate), giving 'focus_only' when UIA is available. On hosts
+    // without UIA the snapshot returns null and we expect 'unverifiable'.
     //
-    // This is the "intentional silent fail" pin from the issue
-    // acceptance criteria: a click that doesn't hit anything must NOT
-    // return verifyDelivery:'delivered'.
-    //
-    // (Avoid coordinates inside the 10px failsafe radius — that triggers
-    // the host MCP server's emergency-stop on real Windows hardware and
-    // kills it mid-test. See issue #365.)
+    // This is the "intentional silent fail" pin from the issue acceptance
+    // criteria: an action that doesn't hit anything must NOT return
+    // verifyDelivery:'delivered'. The dedicated window also keeps this off the
+    // desktop entirely (no Recycle Bin focus, no host-MCP failsafe corner).
     const result = await mouseClickHandler({
-      // Scanned blank desktop spot — no window there, so this click hits nothing.
-      x: BLANK!.x,
-      y: BLANK!.y,
+      // Blank window's empty client area — this click hits nothing actionable.
+      x: blank!.point.x,
+      y: blank!.point.y,
       button: "left",
       doubleClick: false,
       tripleClick: false,
@@ -126,11 +125,11 @@ describe.skipIf(BLANK === null)("mouse_click verifyDelivery hint (issue #178)", 
   }, 15_000);
 
   it("3-value enum: status is one of {delivered, focus_only, unverifiable}", async () => {
-    // Cover the canonical matrix doc §4.4 enum. Click the scanned blank spot —
-    // any of the 3 statuses is acceptable here (no branch requires 'delivered').
+    // Cover the canonical matrix doc §4.4 enum. Click the blank window — any of
+    // the 3 statuses is acceptable here (no branch requires 'delivered').
     const result = await mouseClickHandler({
-      x: BLANK!.x,
-      y: BLANK!.y,
+      x: blank!.point.x,
+      y: blank!.point.y,
       button: "left",
       doubleClick: false,
       tripleClick: false,
@@ -146,7 +145,7 @@ describe.skipIf(BLANK === null)("mouse_click verifyDelivery hint (issue #178)", 
   }, 15_000);
 });
 
-describe.skipIf(BLANK === null)("mouse_drag verifyDelivery hint (issue #178)", () => {
+describe.skipIf(blank === null)("mouse_drag verifyDelivery hint (issue #178)", () => {
   let prevAutoGuard: string | undefined;
   beforeAll(() => {
     prevAutoGuard = process.env.DESKTOP_TOUCH_AUTO_GUARD;
@@ -158,13 +157,13 @@ describe.skipIf(BLANK === null)("mouse_drag verifyDelivery hint (issue #178)", (
   });
 
   it("returns hints.verifyDelivery for drags when default", async () => {
-    // Short drag over the scanned blank desktop spot. allowCrossWindowDrag:true
-    // bypasses the cross-window guard since both endpoints are on the wallpaper.
+    // Short drag inside the blank window. allowCrossWindowDrag:true keeps the
+    // cross-window guard from firing (both endpoints are within our window).
     const result = await mouseDragHandler({
-      startX: BLANK!.x,
-      startY: BLANK!.y,
-      endX: BLANK!.x + 20,
-      endY: BLANK!.y + 20,
+      startX: blank!.point.x,
+      startY: blank!.point.y,
+      endX: blank!.point.x + 20,
+      endY: blank!.point.y + 20,
       homing: false,
       allowCrossWindowDrag: true,
       allowTabDrag: true,
@@ -179,10 +178,10 @@ describe.skipIf(BLANK === null)("mouse_drag verifyDelivery hint (issue #178)", (
 
   it("respects verifyDelivery=false opt-out for drag", async () => {
     const result = await mouseDragHandler({
-      startX: BLANK!.x,
-      startY: BLANK!.y,
-      endX: BLANK!.x + 20,
-      endY: BLANK!.y + 20,
+      startX: blank!.point.x,
+      startY: blank!.point.y,
+      endX: blank!.point.x + 20,
+      endY: blank!.point.y + 20,
       homing: false,
       allowCrossWindowDrag: true,
       allowTabDrag: true,

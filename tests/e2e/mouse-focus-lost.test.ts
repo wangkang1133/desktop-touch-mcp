@@ -9,14 +9,15 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mouseClickHandler } from "../../src/tools/mouse.js";
-import { findBlankDesktopPoint } from "./helpers/blank-point.js";
+import { spawnBlankWindow } from "./helpers/blank-window.js";
 
-// Click a scanned blank desktop spot, never a hardcoded coordinate — (960,540)
-// (screen centre) almost always lands on a real window. Skip if the screen is
-// fully covered (no safe blank spot to click).
-const BLANK = findBlankDesktopPoint();
+// Click a dedicated, empty throwaway window — never a hardcoded coordinate
+// ((960,540) screen centre / (50,50) top-left) that lands on a real window or
+// the Recycle Bin desktop icon. Fully contained: focuses our own window, touches
+// nothing else. Skip only if the window cannot be spawned.
+const blank = await spawnBlankWindow();
 
-describe.skipIf(BLANK === null)("mouse_click focusLost", () => {
+describe.skipIf(blank === null)("mouse_click focusLost", () => {
   // These tests pre-date v0.12 Auto Perception. They exercise focusLost
   // detection, not the auto-guard path — disable auto-guard so it doesn't
   // block clicks based on live desktop modal/window state.
@@ -28,13 +29,14 @@ describe.skipIf(BLANK === null)("mouse_click focusLost", () => {
   afterAll(() => {
     if (prevAutoGuard === undefined) delete process.env.DESKTOP_TOUCH_AUTO_GUARD;
     else process.env.DESKTOP_TOUCH_AUTO_GUARD = prevAutoGuard;
+    blank?.close();
   });
 
   it("succeeds and contains ok:true", async () => {
-    // Click a scanned blank desktop spot (over the wallpaper, no window there)
+    // Click the dedicated blank window's empty client area (no real UI there)
     const result = await mouseClickHandler({
-      x: BLANK!.x,
-      y: BLANK!.y,
+      x: blank!.point.x,
+      y: blank!.point.y,
       button: "left",
       doubleClick: false,
       homing: false,
@@ -48,8 +50,8 @@ describe.skipIf(BLANK === null)("mouse_click focusLost", () => {
 
   it("does not include focusLost when trackFocus=false", async () => {
     const result = await mouseClickHandler({
-      x: BLANK!.x,
-      y: BLANK!.y,
+      x: blank!.point.x,
+      y: blank!.point.y,
       button: "left",
       doubleClick: false,
       homing: false,
@@ -63,8 +65,8 @@ describe.skipIf(BLANK === null)("mouse_click focusLost", () => {
   it("runs without error when trackFocus=true and no windowTitle (no-op path)", async () => {
     // No windowTitle, no homing notes → detectFocusLoss returns null immediately
     const result = await mouseClickHandler({
-      x: BLANK!.x,
-      y: BLANK!.y,
+      x: blank!.point.x,
+      y: blank!.point.y,
       button: "left",
       doubleClick: false,
       homing: false,
@@ -78,9 +80,10 @@ describe.skipIf(BLANK === null)("mouse_click focusLost", () => {
 
   it("includes conversion info when origin is provided", async () => {
     // Verify the origin+scale conversion (screen = origin + local/scale) while
-    // still landing the real click on the scanned blank spot: with x=100,scale=2
-    // the local offset is +50, so origin = BLANK - 50 makes screen === BLANK.
-    const origin = { x: BLANK!.x - 50, y: BLANK!.y - 50 };
+    // still landing the real click on the blank window: with x=100,scale=2 the
+    // local offset is +50, so origin = point - 50 makes screen === point.
+    const pt = blank!.point;
+    const origin = { x: pt.x - 50, y: pt.y - 50 };
     const result = await mouseClickHandler({
       x: 100,
       y: 100,
@@ -95,16 +98,16 @@ describe.skipIf(BLANK === null)("mouse_click focusLost", () => {
     const payload = JSON.parse((result.content[0] as { text: string }).text);
     expect(payload.ok).toBe(true);
     expect(typeof payload.conversion).toBe("string");
-    // screen = origin.x + x/scale = (BLANK.x - 50) + 100/2 = BLANK.x
-    expect(payload.at.x).toBe(BLANK!.x);
-    expect(payload.at.y).toBe(BLANK!.y);
+    // screen = origin.x + x/scale = (pt.x - 50) + 100/2 = pt.x
+    expect(payload.at.x).toBe(pt.x);
+    expect(payload.at.y).toBe(pt.y);
   });
 
   it("skips settle wait and focusLost when trackFocus=false (faster execution)", async () => {
     const before = Date.now();
     await mouseClickHandler({
-      x: BLANK!.x,
-      y: BLANK!.y,
+      x: blank!.point.x,
+      y: blank!.point.y,
       button: "left",
       doubleClick: false,
       tripleClick: false,
@@ -124,8 +127,8 @@ describe.skipIf(BLANK === null)("mouse_click focusLost", () => {
 
   it("skips non-existent window title gracefully (no focusLost when fg matches target)", async () => {
     const result = await mouseClickHandler({
-      x: BLANK!.x,
-      y: BLANK!.y,
+      x: blank!.point.x,
+      y: blank!.point.y,
       button: "left",
       doubleClick: false,
       homing: false,
