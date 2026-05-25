@@ -41,7 +41,10 @@ const ID_CONSOLE_PASTE: usize = 0xFFF1;
 const WM_KEYDOWN: u32 = 0x0100;
 const WM_KEYUP: u32 = 0x0101;
 /// VK_RETURN. Enter is sent as a real KEY EVENT (WM_KEYDOWN + WM_KEYUP), NOT
-/// WM_CHAR 0x0D — kept bit-equal with the TS `postEnterToHwnd`. conhost
+/// WM_CHAR 0x0D — functionally equivalent to the TS `postEnterToHwnd`: the LOW
+/// 32 bits of the keystroke lParam are identical (Win32 reads a keystroke lParam
+/// as 32-bit, so the keyup high bits — which differ from the TS path's
+/// sign-extended JS-32-bit value — are ignored). conhost
 /// PowerShell's PSReadLine treats WM_CHAR 0x0D (= Ctrl+M) as a LITERAL 'm' and
 /// never accepts the line (the command is typed but not run); a VK_RETURN key
 /// event IS recognized as accept-line. bash / cmd accept the key-event Enter as
