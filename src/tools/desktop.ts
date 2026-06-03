@@ -378,12 +378,22 @@ export class DesktopFacade {
     resolved = resolved.slice(0, max);
 
     session.entities = resolved;
-    // ADR-024 Seed-2 — persist whether this discover saw a visual-only (UIA-blind:
-    // PWA/Electron/canvas/RDP) target, for the desktop_act wrapper to gate
-    // post-action roiCapture. Same SSOT predicate as the OCR lane's
-    // `uiaBlindForOcr` (membership in UIA_BLIND_WARNINGS over the discover
-    // warnings), so the two signals never diverge.
-    session.lastDiscoverVisualOnly = rawResult.warnings.some((w) => UIA_BLIND_WARNINGS.has(w));
+    // ADR-024 Seed-2 — persist whether this discover saw a *visual-only* target
+    // for the desktop_act wrapper to gate post-action roiCapture. Visual-only =
+    // UIA-blind (PWA/Electron/canvas/RDP) AND no structured observation source.
+    // UIA-blindness ALONE is not sufficient: the terminal route runs UIA as an
+    // *additive* provider (compose-providers.ts), so a terminal whose UIA tree
+    // looks blind still surfaces uia_blind_* warnings — but the terminal buffer is
+    // a structured source, so a post-action screenshot must be suppressed there
+    // (feedback_minimize_screenshot_reliance; Codex PR #425 P2). Browser (CDP) is
+    // likewise structured. So require a blind warning AND the absence of any
+    // terminal/cdp candidate. The blind predicate stays the same SSOT set as the
+    // OCR lane's `uiaBlindForOcr` (UIA_BLIND_WARNINGS).
+    const uiaBlind = rawResult.warnings.some((w) => UIA_BLIND_WARNINGS.has(w));
+    const hasStructuredSource = rawResult.candidates.some(
+      (c) => c.source === "terminal" || c.source === "cdp",
+    );
+    session.lastDiscoverVisualOnly = uiaBlind && !hasStructuredSource;
     this.registry.replaceViewId(prevViewId, newViewId, key);
 
     // Phase 4 (Codex PR #41 round 5 P1): top-level windows enumeration.

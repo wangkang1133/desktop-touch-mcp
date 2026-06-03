@@ -4,14 +4,15 @@ import type { UiEntityCandidate } from "../../src/engine/vision-gpu/types.js";
 import type { ProviderResult } from "../../src/engine/world-graph/candidate-ingress.js";
 
 // ADR-024 Seed-2 S2 — the visual-only flag (SessionState.lastDiscoverVisualOnly)
-// is written by see() from the discover warnings and read by the desktop_act
+// is written by see() from the discover snapshot and read by the desktop_act
 // wrapper via resolveVisualOnlyForViewId(). This pins the write→read contract
-// (sub-plan §2 S2 acceptance ⑤). The flag must derive from the SAME predicate as
-// the OCR lane (membership in UIA_BLIND_WARNINGS), so we drive it through warnings.
+// (sub-plan §2 S2 acceptance ⑤). Visual-only = UIA-blind warning AND no
+// structured (terminal/cdp) candidate source (Codex PR #425 P2), so we drive
+// the flag through both warnings and candidate sources.
 
-function cand(label: string): UiEntityCandidate {
+function cand(label: string, source: UiEntityCandidate["source"] = "ocr"): UiEntityCandidate {
   return {
-    source: "ocr",
+    source,
     target: { kind: "window", id: "win-1" },
     label,
     role: "label",
@@ -19,18 +20,20 @@ function cand(label: string): UiEntityCandidate {
     confidence: 0.8,
     observedAtMs: 1000,
     provisional: false,
-    digest: `digest-${label}`,
+    digest: `digest-${label}-${source}`,
     rect: { x: 10, y: 20, width: 80, height: 30 },
   };
 }
 
+interface Snapshot { candidates: UiEntityCandidate[]; warnings: string[] }
+
 /** Minimal ingress that returns a snapshot (candidates + warnings) so we control
- *  the discover `warnings` the facade derives the flag from. `warnings` is read
- *  live on each getSnapshot, so a test can mutate it to simulate a regime change
- *  across two discovers on the same session. */
-function mutableIngress(warningsRef: { current: string[] }): CandidateIngress {
+ *  both the discover `warnings` and candidate sources the facade derives the flag
+ *  from. The snapshot is read live on each getSnapshot, so a test can mutate it to
+ *  simulate a regime change across two discovers on the same session. */
+function mutableIngress(ref: { current: Snapshot }): CandidateIngress {
   return {
-    getSnapshot: async (): Promise<ProviderResult> => ({ candidates: [cand("Foo")], warnings: warningsRef.current }),
+    getSnapshot: async (): Promise<ProviderResult> => ({ ...ref.current }),
     invalidate: () => {},
     subscribe: () => () => {},
     dispose: () => {},
@@ -42,8 +45,8 @@ const discover = async (facade: DesktopFacade): Promise<string> => {
   return out.entities[0].lease.viewId;
 };
 
-const facadeWith = (warnings: string[]): DesktopFacade =>
-  new DesktopFacade(() => [], { ingress: mutableIngress({ current: warnings }) });
+const facadeWith = (warnings: string[], candidates: UiEntityCandidate[] = [cand("Foo")]): DesktopFacade =>
+  new DesktopFacade(() => [], { ingress: mutableIngress({ current: { candidates, warnings } }) });
 
 describe("ADR-024 Seed-2 — visual-only flag persistence (discover → act)", () => {
   it("sets the flag when discover reports a UIA-blind warning (single-giant-pane)", async () => {
@@ -66,18 +69,30 @@ describe("ADR-024 Seed-2 — visual-only flag persistence (discover → act)", (
     expect(facade.resolveVisualOnlyForViewId(await discover(facade))).toBe(false);
   });
 
+  it("does NOT set the flag for a terminal target even when UIA looks blind (structured buffer; Codex #425 P2)", async () => {
+    // The terminal route runs UIA additively, so a terminal can surface uia_blind_*
+    // warnings — but the terminal buffer is structured, so roiCapture must be suppressed.
+    const facade = facadeWith(["uia_blind_single_pane"], [cand("$ npm test", "terminal")]);
+    expect(facade.resolveVisualOnlyForViewId(await discover(facade))).toBe(false);
+  });
+
+  it("does NOT set the flag when a cdp candidate is present even with a blind warning", async () => {
+    const facade = facadeWith(["uia_blind_single_pane"], [cand("Search", "cdp")]);
+    expect(facade.resolveVisualOnlyForViewId(await discover(facade))).toBe(false);
+  });
+
   it("returns false (safe default) for an unknown viewId — no session / no discover", () => {
     const facade = new DesktopFacade(() => []);
     expect(facade.resolveVisualOnlyForViewId("never-issued-view-id")).toBe(false);
   });
 
   it("re-evaluates the flag on each discover (blind → structured flips it back to false)", async () => {
-    const ref = { current: ["uia_blind_single_pane"] };
+    const ref = { current: { candidates: [cand("Foo")], warnings: ["uia_blind_single_pane"] } };
     const facade = new DesktopFacade(() => [], { ingress: mutableIngress(ref) });
     const v1 = await discover(facade);
     expect(facade.resolveVisualOnlyForViewId(v1)).toBe(true);
     // Same target → same session key; the next discover updates the same session.
-    ref.current = [];
+    ref.current = { candidates: [cand("Foo")], warnings: [] };
     const v2 = await discover(facade);
     expect(facade.resolveVisualOnlyForViewId(v2)).toBe(false);
   });
