@@ -482,14 +482,15 @@ export const desktopTouchSchema = {
   ),
   text:   z.string().optional().describe("Text to type or set (required when action='type' or action='setValue')."),
   returnCapture: z.enum(["on-change", "always", "never"]).optional().describe(
-    "[EXPERIMENTAL] ADR-024 Seed-2 — control post-action ROI capture on visual-only targets " +
-    "(UIA-blind / RDP / canvas). When the act succeeds on such a target, the response may carry " +
-    "a 'roiCapture' { roi, somImage, entities } (diff-region crop + lease-less entity preview) so " +
-    "you can confirm the result and find the next target without a separate desktop_state / screenshot. " +
-    "'on-change' (default behaviour) attaches it only when the act produced a visible change; 'always' " +
-    "attaches it on any successful visual-only act; 'never' suppresses it. Has no effect on structured " +
-    "targets (browser/CDP, UIA-rich native) — use desktop_state there. Preview entities have no lease; " +
-    "re-call desktop_discover to act on them."
+    "[EXPERIMENTAL — RESERVED, NOT YET ACTIVE] ADR-024 Seed-2 — will control post-action ROI capture on " +
+    "visual-only targets (UIA-blind / RDP / canvas). Accepted now so clients can adopt the option, but " +
+    "the capture is still being rolled out: this version NEVER attaches 'roiCapture', for any value. Do " +
+    "not depend on a capture yet. When active, a successful act on a visual-only target will carry a " +
+    "'roiCapture' { roi, somImage, entities } (diff-region crop + lease-less entity preview) so you can " +
+    "confirm the result and find the next target without a separate desktop_state / screenshot. Planned " +
+    "semantics: 'on-change' (default) attaches only on a visible change; 'always' on any successful " +
+    "visual-only act; 'never' suppresses it. No effect on structured targets (browser/CDP, UIA-rich " +
+    "native) — use desktop_state there."
   ),
 };
 
@@ -825,10 +826,9 @@ export function registerDesktopTools(server: McpServer): void {
       "  executor_failed → fall back to V1 tools (click_element / mouse_click / browser_click);",
       "  executor_failed on terminal textbox (action=type) → use V1 terminal(action='send') instead.",
       "Check desktop_discover response.constraints for pre-emptive fallback hints before calling desktop_act.",
-      "[EXPERIMENTAL] On visual-only targets (UIA-blind / RDP / canvas), pass returnCapture to fold a post-action",
-      "'roiCapture' { roi, somImage, entities } (diff-region crop + lease-less entity preview) into the response —",
-      "confirm the result and find the next target without a separate desktop_state/screenshot. Preview entities",
-      "have no lease; re-call desktop_discover to act on them.",
+      "[EXPERIMENTAL — RESERVED] returnCapture is accepted but NOT YET ACTIVE: this version never attaches a",
+      "'roiCapture' for any value. When rolled out it will fold a post-action diff-region crop + lease-less",
+      "entity preview into the response on visual-only targets (UIA-blind / RDP / canvas). Do not depend on it yet.",
     ].join(" "),
     desktopActRegistrationSchema,
     desktopActRegistrationHandler as (input: unknown) => Promise<ToolResult>,
