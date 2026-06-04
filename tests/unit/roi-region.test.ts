@@ -197,6 +197,19 @@ describe("rectIoU (S5 OQ-10 dedup metric)", () => {
     ).toBeCloseTo(50 / 150, 6);
   });
 
+  it("hits exactly 0.5 at the dedup threshold boundary (>= drops)", () => {
+    // Construct IoU == 0.5 exactly: inter / (A + B - inter) = 0.5 ⟺ inter = A+B-inter
+    // ⟺ 2*inter = A+B. Two 10x10 rects (A=B=100) need inter=100 → identical... so
+    // use different sizes: A=10x10=100, B fully inside A but 100 too → use a 10x10
+    // and a rect that overlaps with inter=100/... Instead: A=20x10=200, B=10x10=100
+    // fully inside A → inter=100, union=200+100-100=200 → IoU=0.5 exactly.
+    const a = { x: 0, y: 0, width: 20, height: 10 }; // area 200
+    const b = { x: 0, y: 0, width: 10, height: 10 }; // area 100, fully inside a
+    expect(rectIoU(a, b)).toBe(0.5);
+    // ROI_DEDUP_IOU uses `>= 0.5`, so this pair would dedup (drop the preview).
+    expect(rectIoU(a, b)).toBeGreaterThanOrEqual(0.5);
+  });
+
   it("a half-contained quarter-overlap clears/misses the 0.5 dedup gate as expected", () => {
     // 25% area overlap → IoU = 25/(100+100-25) = 25/175 ≈ 0.143 < 0.5 (kept).
     const iou = rectIoU(

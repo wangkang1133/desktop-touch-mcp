@@ -485,15 +485,14 @@ export const desktopTouchSchema = {
   ),
   text:   z.string().optional().describe("Text to type or set (required when action='type' or action='setValue')."),
   returnCapture: z.enum(["on-change", "always", "never"]).optional().describe(
-    "[EXPERIMENTAL — RESERVED, NOT YET ACTIVE] ADR-024 Seed-2 — will control post-action ROI capture on " +
-    "visual-only targets (UIA-blind / RDP / canvas). Accepted now so clients can adopt the option, but " +
-    "the capture is still being rolled out: this version NEVER attaches 'roiCapture', for any value. Do " +
-    "not depend on a capture yet. When active, a successful act on a visual-only target will carry a " +
-    "'roiCapture' { roi, somImage, entities } (diff-region crop + lease-less entity preview) so you can " +
-    "confirm the result and find the next target without a separate desktop_state / screenshot. Planned " +
-    "semantics: 'on-change' (default) attaches only on a visible change; 'always' on any successful " +
-    "visual-only act; 'never' suppresses it. No effect on structured targets (browser/CDP, UIA-rich " +
-    "native) — use desktop_state there."
+    "[EXPERIMENTAL] ADR-024 Seed-2 — controls the post-action ROI capture on visual-only targets " +
+    "(UIA-blind / RDP / canvas). When it attaches, a successful act carries a 'roiCapture' " +
+    "{ roi, somImage, entities }: a base64 PNG crop of the changed region plus a lease-less entity " +
+    "preview, so you can confirm the result and find the next target without a separate desktop_state / " +
+    "screenshot. The entities are previews only (no lease) — re-run desktop_discover to act on them. " +
+    "Semantics: 'on-change' (default for visual-only targets) attaches only on a visible change; 'always' " +
+    "on any successful visual-only act; 'never' suppresses it. No effect on structured targets " +
+    "(browser/CDP, UIA-rich native) — 'roiCapture' is never attached there; use desktop_state."
   ),
 };
 
@@ -747,6 +746,14 @@ async function buildRoiCapture(
 
     // OQ-10 — dedup the preview against the discover snapshot (screen-abs rects).
     const discoverRects = facade.getDiscoverEntityRectsForViewId(viewId);
+    // `role: "label"` + `actionability: ["click"]` mirror how the SAME OCR
+    // source is represented in the discover lane (`ocr-provider.ts` maps every
+    // SomElement to role "label" / actionability ["click"], since the executor
+    // routes source:"ocr" entities to a mouse click). Keeping the preview's
+    // representation identical to discover's avoids a confusing role/affordance
+    // mismatch between what desktop_discover and roiCapture report for the same
+    // on-screen text. The preview is lease-less regardless, so this is a hint —
+    // the caller must re-run desktop_discover to obtain an actionable lease.
     const entities: RoiPreviewEntity[] = som.elements
       .filter((el) => !discoverRects.some((d) => rectIoU(el.region, d) >= ROI_DEDUP_IOU))
       .map((el) => ({
@@ -941,9 +948,11 @@ export function registerDesktopTools(server: McpServer): void {
       "  executor_failed → fall back to V1 tools (click_element / mouse_click / browser_click);",
       "  executor_failed on terminal textbox (action=type) → use V1 terminal(action='send') instead.",
       "Check desktop_discover response.constraints for pre-emptive fallback hints before calling desktop_act.",
-      "[EXPERIMENTAL — RESERVED] returnCapture is accepted but NOT YET ACTIVE: this version never attaches a",
-      "'roiCapture' for any value. When rolled out it will fold a post-action diff-region crop + lease-less",
-      "entity preview into the response on visual-only targets (UIA-blind / RDP / canvas). Do not depend on it yet.",
+      "[EXPERIMENTAL] On visual-only targets (UIA-blind / RDP / canvas), a successful act may attach a",
+      "'roiCapture' { roi, somImage, entities }: a base64 PNG crop of the changed region + a lease-less entity",
+      "preview, so you can confirm the result + find the next target in one call (no separate desktop_state /",
+      "screenshot). entities are previews (no lease) — re-run desktop_discover to act. Control via returnCapture",
+      "('on-change' default / 'always' / 'never'). Never attached on structured targets (browser/CDP, UIA-rich).",
     ].join(" "),
     desktopActRegistrationSchema,
     desktopActRegistrationHandler as (input: unknown) => Promise<ToolResult>,
