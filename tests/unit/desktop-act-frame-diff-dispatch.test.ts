@@ -19,6 +19,14 @@
  *      → roiCapture present with the FULL-WINDOW roi, never a wrong localized one
  *      (P1-1, end-to-end).
  *
+ * Acceptance coverage (sub-plan §S5c): this file pins ③ (no TS pixel loop),
+ * ④ (non-visual byte-equal + pre-frame not captured for structured targets) and
+ * ⑤ (BitBlt-fallback → full-window). Acceptance ① (busy desktop static window →
+ * no_change) and ② (localized change → ROI tracks) need a live busy/occluded
+ * desktop and are covered by the S5c-1b manual dogfood
+ * (`adr-024-seed2-dogfood-findings.md`); ⑥ (capture-count bound / latency) is an
+ * S6 bench measurement. Those three are intentionally deferred here, not missing.
+ *
  * Sub-plan: `desktop-touch-mcp-internal@…:docs/adr-024-seed2-plan.md` §S5c-2.
  */
 
@@ -199,6 +207,9 @@ describe("desktop_act frame-diff dispatch (S5c-2 handler-level)", () => {
 
     const observation = parsed["observation"] as Record<string, unknown>;
     expect(observation["motion"]).toBe("any_change");
+    // acceptance ④: the structured-target observation keeps the DXGI source verdict
+    // (not a frame-diff source) — the Stage 5 telemetry contract is byte-equal.
+    expect(observation["source"]).toBe("dxgi_dirty_rect");
     // Gate hard-guards on visualOnly → no roiCapture for structured targets.
     expect(parsed["roiCapture"]).toBeUndefined();
   });
