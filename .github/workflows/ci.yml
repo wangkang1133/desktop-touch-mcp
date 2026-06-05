@@ -86,6 +86,19 @@ jobs:
           if (-not $found) { throw "node.lib not found in $cache" }
           Copy-Item -LiteralPath $found.FullName -Destination (Join-Path $PWD "node.lib")
 
+      - name: Check Rust test targets compile (guards dep-API drift in #[cfg(test)] code)
+        # `check:rs-workspace` only compiles non-test code, so test-only code —
+        # e.g. the vision-gpu tokenizer tests under #[cfg(all(test, feature =
+        # "vision-gpu"))] — can silently rot against upstream crate API changes
+        # (tokenizers 0.21 moved `WordLevelBuilder::vocab` to AHashMap and made
+        # `with_post_processor` take Option<_>). This `--no-run` step compiles
+        # every test binary so that drift fails CI. We intentionally do NOT run
+        # the tests here: the runtime unit suite is non-hermetic on the 2-core
+        # windows runners (DXGI screen-capture / focus tests flake without a
+        # live desktop), so a compile guard is the robust CI contract. Placed
+        # after the node.lib fetch because the napi test binary links node.lib.
+        run: npm run check:rs-test-compile
+
       - name: Build native addon (Rust → .node, debug profile for CI speed)
         run: npm run build:rs:debug
 

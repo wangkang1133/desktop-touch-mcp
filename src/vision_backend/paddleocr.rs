@@ -58,6 +58,7 @@ struct Crop {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// PaddleOCR dictionary wrapper.
+#[derive(Debug)]
 pub struct PaddleOcrDict {
     /// Characters indexed by class id (index 0 is CTC blank, indices 1.. are real chars).
     chars: Vec<String>,

@@ -78,11 +78,19 @@ target/
 *.node
 *.node.bak
 *.node.old
+# native-rebuild rename trick: in-use .node is moved aside so cargo can relink
+# while the session MCP server keeps its handle (see ADR-024 env notes).
+*.node.inuse-*
 libnode.a
 libnode.dll.a
 node.def
 node.lib
 .pr*.diff
+
+# Local dogfood / diagnostic scratch scripts (ADR-024 visual-only ROI sessions).
+# Kept at repo root, never committed — wire-up lives in tests/benches instead.
+.dogfood-*
+.diag-*
 
 # napi-rs scaffolding tests — never wired into vitest; not run in CI.
 # Kept locally for the upstream sync script (scripts/sync-rust-from-engine-rs.sh)

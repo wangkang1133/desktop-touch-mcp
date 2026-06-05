@@ -726,6 +726,7 @@ impl PromptTokens {
 /// Loading is from a `tokenizer.json` file produced by HuggingFace tokenizers
 /// (the format Microsoft ships at `microsoft/Florence-2-base/tokenizer.json`).
 /// Network-based `from_pretrained` is intentionally NOT exposed.
+#[derive(Debug)]
 pub struct Florence2Tokenizer {
     inner: tokenizers::Tokenizer,
 }
@@ -794,19 +795,25 @@ mod tokenizer_tests {
         models::wordlevel::WordLevelBuilder,
         Tokenizer,
     };
-    use std::collections::HashMap;
 
     /// Build a synthetic Florence-2-like tokenizer programmatically:
     /// vocab = {"<s>": 0, "<pad>": 1, "</s>": 2, "<unk>": 3, "<REGION_PROPOSAL>": 50267}
     /// uses WordLevel model (simple whole-word lookup, sufficient for special-token tests).
     /// Special tokens BOS=0, EOS=2 are added so encode("<REGION_PROPOSAL>") yields [0, 50267, 2].
     fn build_synthetic_tokenizer() -> Tokenizer {
-        let mut vocab: HashMap<String, u32> = HashMap::new();
-        vocab.insert("<s>".to_string(), 0);
-        vocab.insert("<pad>".to_string(), 1);
-        vocab.insert("</s>".to_string(), 2);
-        vocab.insert("<unk>".to_string(), 3);
-        vocab.insert("<REGION_PROPOSAL>".to_string(), 50267);
+        // tokenizers 0.21 `WordLevelBuilder::vocab` takes `AHashMap<String, u32>`
+        // (an `ahash`-backed map). Build it via a type-inferred `collect()` so the
+        // target map type comes from the `.vocab()` parameter, avoiding a direct
+        // `ahash` dependency in this test.
+        let vocab = [
+            ("<s>".to_string(), 0),
+            ("<pad>".to_string(), 1),
+            ("</s>".to_string(), 2),
+            ("<unk>".to_string(), 3),
+            ("<REGION_PROPOSAL>".to_string(), 50267),
+        ]
+        .into_iter()
+        .collect();
         let model = WordLevelBuilder::default()
             .vocab(vocab)
             .unk_token("<unk>".into())
@@ -815,13 +822,14 @@ mod tokenizer_tests {
         let mut tok = Tokenizer::new(model);
         // BART-style: BOS at start, EOS at end, controlled by post-processor.
         // For test simplicity we use TemplateProcessing.
-        tok.with_post_processor(
+        // tokenizers 0.21 `with_post_processor` takes `Option<PP>`.
+        tok.with_post_processor(Some(
             tokenizers::processors::template::TemplateProcessing::builder()
                 .try_single("<s> $A </s>").unwrap()
-                .special_tokens(vec![("<s>".into(), 0), ("</s>".into(), 2)])
+                .special_tokens(vec![("<s>", 0u32), ("</s>", 2u32)])
                 .build()
                 .unwrap(),
-        );
+        ));
         tok.add_special_tokens(&[
             tokenizers::AddedToken::from("<s>", true),
             tokenizers::AddedToken::from("</s>", true),
