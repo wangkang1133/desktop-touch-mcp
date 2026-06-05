@@ -46,8 +46,9 @@ $form.MinimizeBox = $false
 # title bar — or the brief spawn/close moment when the desktop is exposed under
 # the TopMost form — selected the Recycle Bin instead. This is the same hazard
 # tests/e2e/helpers/blank-window.ts documents (a (50,50) click "selected the
-# Recycle Bin desktop icon at every full-suite run"). CenterScreen keeps the whole
-# window clear of the edge/corner icons on any resolution. We don't need the old
+# Recycle Bin desktop icon at every full-suite run"). CenterScreen keeps the
+# window clear of the top-left desktop-icon column where the Recycle Bin lives.
+# We don't need the old
 # "no overlapping background" rationale: busy-background correctness is handled
 # structurally by the S5c frame-diff regime (occlusion-immune PrintWindow).
 $form.StartPosition = 'CenterScreen'
