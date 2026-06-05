@@ -14,6 +14,7 @@ import {
 } from "../engine/world-graph/session-registry.js";
 import type { CandidateIngress } from "../engine/world-graph/candidate-ingress.js";
 import { createDesktopExecutor, type ExecutorDeps } from "./desktop-executor.js";
+import { resolveWindowTarget, findPlainTopLevelWindowByTitle } from "./_resolve-window.js";
 import type { TouchAction, TouchResult } from "../engine/world-graph/guarded-touch.js";
 import { deriveViewConstraints, type ViewConstraints, type EntityCapabilities } from "./desktop-constraints.js";
 import { UIA_BLIND_WARNINGS } from "./desktop-providers/compose-providers.js";
@@ -618,6 +619,65 @@ export class DesktopFacade {
   }
 
   /**
+   * ADR-024 Seed-2 S5c-1a — resolve the HWND of the window the lease's session
+   * actually targets, for the visual-only frame-diff pre/post capture.
+   *
+   * This deliberately does NOT reuse `resolveHwndForViewId` (the ADR-019 Stage 5
+   * resolver, which foreground-falls-back for `windowTitle` targets). That
+   * fallback is sound for Stage 5 because its DXGI poll runs *after* the action,
+   * by which point clicking the target has usually brought it to the foreground.
+   * The frame-diff captures its PRE frame *before* the click, so a `windowTitle`
+   * target that is not yet foreground would otherwise diff the wrong (foreground)
+   * window and report `no_change` (Codex PR #431 P2). Resolve `windowTitle → hwnd`
+   * via the same `resolveWindowTarget` the discover providers use
+   * (`compose-providers.ts`), so we capture the exact window discover enumerated.
+   * A pinned `hwnd` is used directly; a target with neither (the bare
+   * `desktop_discover()` foreground flow) falls back to the foreground HWND, which
+   * is the honest target there. Returns `null` when the session is gone or no
+   * window resolves. Never throws.
+   */
+  async resolveTargetHwndForFrameDiff(viewId: string): Promise<bigint | null> {
+    const session = this.registry.getByViewId(viewId, this.opts.nowFn);
+    if (!session) return null;
+    const target = session.lastTarget;
+    if (target?.hwnd) {
+      try {
+        return BigInt(target.hwnd);
+      } catch {
+        // Malformed pinned hwnd — fall through to title / foreground resolution.
+      }
+    }
+    if (target?.windowTitle) {
+      // `resolveWindowTarget` deliberately returns null for a plain top-level
+      // window (it only special-cases `@active` + dialogs, _resolve-window.ts
+      // Case 3), so a plain title would otherwise fall through to foreground —
+      // defeating the fix (Codex PR #431 round 2 P2). Resolve plain titles via
+      // the top-level-by-title SSOT first (the same predicate discover's title
+      // flow relies on), then fall back to `resolveWindowTarget` for the
+      // `@active` / dialog cases.
+      try {
+        const win = findPlainTopLevelWindowByTitle(target.windowTitle, { excludeMinimized: true });
+        if (win) return typeof win.hwnd === "bigint" ? win.hwnd : BigInt(win.hwnd);
+      } catch {
+        // enum failure — fall through.
+      }
+      try {
+        const resolved = await resolveWindowTarget({ windowTitle: target.windowTitle });
+        if (resolved) return resolved.hwnd;
+      } catch {
+        // Resolution failure — fall through to foreground.
+      }
+    }
+    // Bare `desktop_discover()` (no hwnd / no title) → foreground is the target.
+    if (!this.opts.getFocusedHwnd) return null;
+    try {
+      return this.opts.getFocusedHwnd();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * ADR-024 Seed-2 — read the visual-only flag persisted at the most recent
    * `desktop_discover` for this session's view, used by the `desktop_act` wrapper
    * to gate post-action `roiCapture`. Returns `false` when the session is gone or
@@ -643,6 +703,27 @@ export class DesktopFacade {
     return session.entities
       .filter((e): e is typeof e & { rect: Rect } => e.rect !== undefined)
       .map((e) => ({ rect: e.rect, label: e.label ?? "" }));
+  }
+
+  /**
+   * ADR-024 Seed-2 S5c-1a — screen-absolute centre of the entity a lease points
+   * at, used as the focal `hint.point` for the visual-only frame-diff motion
+   * verdict (`verifyLocalRepaint`). Without a focal point the diff runs over the
+   * whole window, so a small localized change (a click that repaints ~few % of
+   * the window) is diluted below the SSIM delivery threshold and degrades to
+   * `indeterminate`. The clicked entity's centre is where the change is expected,
+   * so a padded region around it captures the repaint. Returns `null` when the
+   * session/entity is gone or the entity carries no rect.
+   */
+  resolveEntityCenterForViewId(viewId: string, entityId: string): { x: number; y: number } | null {
+    const session = this.registry.getByViewId(viewId, this.opts.nowFn);
+    if (!session) return null;
+    const entity = session.entities.find((e) => e.entityId === entityId);
+    if (!entity?.rect) return null;
+    return {
+      x: Math.round(entity.rect.x + entity.rect.width / 2),
+      y: Math.round(entity.rect.y + entity.rect.height / 2),
+    };
   }
 
   validateLeaseOnly(lease: EntityLease): LeaseValidationResult {
