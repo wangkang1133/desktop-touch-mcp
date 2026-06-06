@@ -28,7 +28,7 @@
           <a href="./articles/beyond-coordinate-roulette.html">B-C-R</a>
           <a href="./articles/planned-evaluation.html">Evaluation</a>
           <a href="./articles/client-setup.html">Setup</a>
-          <a href="./articles/v1.8-milestone.html">Milestones</a>
+          <a href="./articles/v1.10-milestone.html">Milestones</a>
           <a href="https://github.com/Harusame64/desktop-touch-mcp">GitHub</a>
         </nav>
       </div>
@@ -102,6 +102,10 @@
             <h2>Project Milestones</h2>
             <p>As the project evolves, we document major architectural shifts and milestones here.</p>
             <div class="three-up">
+              <a class="mini-card" href="./articles/v1.10-milestone.html">
+                <h3>v1.10: A Visual-Only Act That Confirms Itself</h3>
+                <p>On a target the accessibility tree can't describe — Electron, PWA, game, custom canvas, Remote Desktop — a successful <code>desktop_act</code> can bundle a <code>roiCapture</code>: a PNG crop of <em>just the region that changed</em> plus a lease-less preview of the controls now visible there. It folds "act → <code>desktop_state</code> → <code>screenshot</code>" into a single call. On by default for a visible change; <code>returnCapture:"never"</code> suppresses it. Never attached on structured targets, where <code>desktop_state</code> is cheaper and exact.</p>
+              </a>
               <a class="mini-card" href="https://github.com/Harusame64/desktop-touch-mcp/releases/tag/v1.9.0">
                 <h3>v1.9: Semantic Targeting Reaches the Browser</h3>
                 <p><code>browser_click</code> and <code>browser_fill</code> can target an element by what it <em>means</em> (<code>by:'text'|'role'|'ariaLabel'</code> + a <code>pattern</code>), resolving to a single actionable target and stopping — not guessing — when the match is ambiguous. The browser also learns to tell a real modal dialog from a navigation drawer: <code>browser_overview</code> reports a machine-readable <code>modal</code> state and <code>browser_click</code> refuses to click <em>through</em> a blocking dialog onto its backdrop. "See entities, not coordinates," applied to the web.</p>
@@ -222,7 +226,7 @@ act</pre></div>
             <span class="label warm">Explore</span>
             <h2>Where to go next</h2>
             <div class="three-up">
-              <a class="mini-card" href="./articles/v1.8-milestone.html"><h3>v1.8 Milestone</h3><p>From delivery to completion: terminal exit codes, the Excel VBA bridge, and a hardened act-and-observe loop.</p></a>
+              <a class="mini-card" href="./articles/v1.10-milestone.html"><h3>v1.10 Milestone</h3><p>Targeting by meaning and confirming in one call: browser semantic targeting, and a visual-only act that returns a changed-region crop plus next-target preview.</p></a>
               <a class="mini-card" href="./articles/reactive-perception-graph.html"><h3>RPG explainer</h3><p>A diagram-heavy walkthrough of why stale assumptions matter and how RPG responds.</p></a>
               <a class="mini-card" href="./articles/beyond-coordinate-roulette.html"><h3>Beyond Coordinate Roulette</h3><p>The philosophy piece behind entity-first, meaning-first UI interaction.</p></a>
             </div>

@@ -22,6 +22,7 @@ npx -y @harusame64/desktop-touch-mcp
 
 - **⚡ High-performance Rust Native Core** — The UIA bridge and image-diff engine are written in Rust (`napi-rs` + `windows-rs`) and loaded as a native `.node` addon. Direct COM calls from a dedicated MTA thread eliminate PowerShell process spawning — `getFocusedElement` completes in **2 ms** (160× faster), and `getUiElements` returns full trees in **~100 ms** with a batch BFS algorithm that minimizes cross-process RPC. Image-diff operations use **SSE2 SIMD** for 13–15× throughput. When the native engine is unavailable, every function transparently falls back to PowerShell — zero config required.
 - **🎯 Set-of-Marks (SoM) visual fallback** — Games, RDP sessions, and non-accessible Electron apps return clickable elements even when UIA is completely blind. `screenshot(detail="text")` automatically detects UIA sparsity and activates a Hybrid Non-CDP pipeline: Rust-powered grayscale + bilinear upscale → Windows OCR → clustering → red bounding-box annotation with numbered badges (`[1]`, `[2]`…). Two parallel representations returned: a visual PNG for spatial orientation and a semantic `elements[]` list with `clickAt` coords — no CDP required.
+- **🔁 One-call confirmation on visual-only targets** — On UIA-blind targets (Electron, PWAs, games, custom canvases, RDP windows), `desktop_act` can fold the post-action confirmation into its own response: an optional `roiCapture` carrying a PNG crop of *just the region that changed* plus a lease-less preview of the controls now visible there. The agent confirms what its click did and finds the next target without a separate `desktop_state` + `screenshot`. On visual-only targets it is **on by default** for a visible change (`returnCapture:"on-change"`); pass `returnCapture:"never"` to suppress it, or `"always"` to force it. Never attached on structured targets (browser/CDP, UIA-rich native), where `desktop_state` is cheaper and exact — so those responses are unchanged.
 - **LLM-native design** — Built around how LLMs think, not how humans click. `run_macro` batches multiple operations into a single API call; `diffMode` sends only the windows that changed since the last frame. Minimal tokens, minimal round-trips.
 - **Reactive Perception Graph** — Register a `lensId` for a window or browser tab, pass it to action tools, and get guard-checked `post.perception` feedback after each action. It reduces repeated `screenshot` / `desktop_state` calls and prevents wrong-window typing or stale-coordinate clicks.
 - **Full CJK support** — Uses Win32 `GetWindowTextW` for window titles, avoiding nut-js garbling. IME bypass input supported for Japanese/Chinese/Korean environments.
@@ -131,7 +132,7 @@ For a local checkout, register the built server directly:
 | Tool | Description |
 |---|---|
 | `desktop_discover` | Observe the desktop. Returns interactive entities with leases (UIA, CDP, Terminal, Visual SoM). |
-| `desktop_act` | Perform actions (click, type, drag, select) on entities via lease validation. Returns semantic diffs. |
+| `desktop_act` | Perform actions (click, type, drag, select) on entities via lease validation. Returns semantic diffs — plus an optional `roiCapture` (changed-region PNG + next-target preview) on visual-only targets. |
 
 ### 👁️ Observation & State
 | Tool | Description |
@@ -687,7 +688,7 @@ V2 introduces two new tools that replace coordinate-based clicking with entity-b
 | Tool | Description |
 |---|---|
 | `desktop_discover` | Observe a window or browser tab. Returns interactive entities with leases — no raw screen coordinates. Supports UIA (native), CDP (browser), terminal, and visual GPU lanes. |
-| `desktop_act` | Interact with an entity returned by `desktop_discover`. Validates the lease before executing. Returns a semantic diff (`entity_disappeared`, `modal_appeared`, `focus_shifted`, …). |
+| `desktop_act` | Interact with an entity returned by `desktop_discover`. Validates the lease before executing. Returns a semantic diff (`entity_disappeared`, `modal_appeared`, `focus_shifted`, …). On visual-only targets a successful act can bundle a `roiCapture` (a PNG crop of the changed region + a lease-less next-target preview) so you confirm the result and find the next target in one call — controlled by `returnCapture` (`on-change`, the default on a visible change; `never` to suppress; `always` to force). |
 
 ### Clicking — priority order
 
