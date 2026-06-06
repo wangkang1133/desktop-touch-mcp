@@ -53,6 +53,7 @@ vi.mock("../../src/engine/window-cache.js", () => ({
   getCachedWindowByTitle: vi.fn(() => null),
   computeWindowDelta: vi.fn(() => null),
   getSnapshot: vi.fn(() => null),
+  WINDOW_CACHE_TTL_EXPORTED_MS: 60_000,
 }));
 
 vi.mock("../../src/engine/uia-bridge.js", () => ({
