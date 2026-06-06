@@ -751,10 +751,19 @@ export class DesktopFacade {
   /**
    * ADR-024 Seed-2 S5b — the EXACT `target.id` the discover OCR lane used for
    * this view (`ocr-provider.ts`: `target.hwnd ?? target.windowTitle ?? "@active"`).
-   * The fold's post-OCR candidates must carry the SAME `target.id` so their
+   * The fold's carry-forward candidates must carry the SAME `target.id` so their
    * entityId (`sha1(window:targetId | label | snapRect)`) matches the
    * pre-snapshot — otherwise the touched entity reads as `entity_disappeared`
    * (R1). Returns `null` when the session is gone (handler then skips the fold).
+   *
+   * Parity is structural (Codex PR #438 P2 / Opus refute): the discover OCR lane
+   * receives the SAME raw `target` object (`see()` stores `lastTarget = input.target`
+   * at `desktop.ts:351` and `composeCandidates(target)` → `fetchOcrCandidates(target)`
+   * gets it UN-normalized at `compose-providers.ts:289`), so `@active` /
+   * `windowTitle` / `hwnd` all key identically here and there — there is no
+   * normalized-HWND-vs-`@active` divergence. (A `lastTarget` change between
+   * discover and act bumps the generation → the stale lease fails validation
+   * before the fold, so the read here always matches the lease's discover.)
    */
   resolveOcrTargetIdForViewId(viewId: string): string | null {
     const session = this.registry.getByViewId(viewId, this.opts.nowFn);
