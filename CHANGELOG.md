@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.10.1] - 2026-06-06 — `browser_click` recovers from hidden duplicate elements
+
+### Fixed
+
+- **`browser_click` with a CSS selector now clicks the visible element when the
+  page also has a hidden duplicate that matches the same selector.** On many
+  single-page apps (Google Search Console, Material UI and similar React sites) a
+  button can share its selector — often the same `aria-label` — with a hidden,
+  zero-size copy that appears first in the DOM. Previously `browser_click` matched
+  that hidden copy and failed with `Element has zero size (hidden or not
+  rendered)`, forcing a fallback to scripting the click by hand. Now, when the
+  first match is hidden/zero-size, `browser_click` automatically retargets to the
+  visible, clickable element that matches the selector. If more than one visible
+  element matches, it stops and returns the candidates so you can disambiguate —
+  it never guesses. Behavior is unchanged whenever the first match is already
+  visible. Pass `scrollIntoView: true` and the rescue will also scroll an
+  off-screen visible match into view before clicking.
+
 ## [1.10.0] - 2026-06-06 — `desktop_act` can bundle a result preview on visual-only targets
 
 ### Added
