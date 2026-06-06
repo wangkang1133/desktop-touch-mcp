@@ -135,7 +135,8 @@ describe("somElementsToCandidates (S5b diff baseline mapping)", () => {
 
   // ADR-024 Seed-2 S5b-3 — @active parity (Codex PR #438 P2 defensive pin). The
   // fold's carry-forward keys candidates by the SAME `target.id` the discover OCR
-  // lane used: `target.hwnd ?? target.windowTitle ?? "@active"` (ocr-provider.ts).
+  // lane used: `target.hwnd ?? target.windowTitle ?? "@active"`
+  // (src/tools/desktop-providers/ocr-provider.ts:38).
   // Codex flagged a possible `@active`-vs-normalized-HWND divergence; it was
   // refuted in code (both sides read the same un-normalized lastTarget). This pins
   // the structural half across ALL THREE id forms: for each, the ROI-crop

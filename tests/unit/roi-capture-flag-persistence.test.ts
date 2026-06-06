@@ -133,7 +133,8 @@ describe("ADR-024 Seed-2 S5c-1a — resolveEntityCenterForViewId (frame-diff foc
 
 // ADR-024 Seed-2 S5b — facade fold accessors (read at act time on the discover
 // session). `resolveOcrTargetIdForViewId` MUST mirror the discover OCR lane's id
-// formula (`ocr-provider.ts`: `target.hwnd ?? target.windowTitle ?? "@active"`)
+// formula (`src/tools/desktop-providers/ocr-provider.ts:38`:
+// `target.hwnd ?? target.windowTitle ?? "@active"`)
 // so the fold's carry-forward candidates key to the SAME entityId (R1). This is
 // the facade half of the @active parity pin (the resolver half is in
 // roi-preview.test.ts). `discoverHasVisualGpuForViewId` is the D6 fold gate.
@@ -156,7 +157,7 @@ describe("ADR-024 Seed-2 S5b — resolveOcrTargetIdForViewId (@active parity)", 
   });
 
   it("returns the '@active' literal when the target pinned neither hwnd nor title", async () => {
-    // The exact fallback ocr-provider.ts keys on — both sides read the same
+    // The exact fallback the discover OCR lane keys on — both sides read the same
     // un-normalized lastTarget, so an @active discover and its fold agree (Codex
     // PR #438 P2 refute, pinned).
     const facade = facadeWith([]);
