@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>v1.10 Milestone: Targeting by Meaning, Confirming in One Call</title>
+    <meta name="description" content="How v1.9 and v1.10 extend 'see entities, not coordinates' to the two surfaces that resisted it — the browser DOM and apps with no accessible surface at all — and let a single act both confirm its result and reveal the next target." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Manrope:wght@500;700;800&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../assets/styles.css" />
+    <script defer src="../assets/site.js"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "base", securityLevel: "loose", themeVariables: { primaryColor: "#e8f1ff", primaryTextColor: "#1d2433", primaryBorderColor: "#3141b7", lineColor: "#58657d", secondaryColor: "#f8dfd4", tertiaryColor: "#d7f2ed", fontFamily: "Manrope" } });
+    </script>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="site-shell">
+        <a class="brand" href="../index.html">
+          <span class="brand-kicker">Milestone</span>
+          <span class="brand-title">v1.10: Targeting by Meaning, Confirming in One Call</span>
+        </a>
+        <nav class="nav-links" aria-label="Main">
+          <a href="../index.html">Home</a>
+          <a href="./reactive-perception-graph.html">RPG</a>
+          <a href="./beyond-coordinate-roulette.html">B-C-R</a>
+          <a href="./planned-evaluation.html">Evaluation</a>
+          <a href="./client-setup.html">Setup</a>
+          <a href="./v1.10-milestone.html">Milestones</a>
+          <a href="https://github.com/Harusame64/desktop-touch-mcp">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="page">
+      <div class="site-shell">
+        <section class="hero-card">
+          <div class="article-hero">
+            <a class="breadcrumb" href="../index.html">← Back to project top</a>
+            <span class="eyebrow">Project Evolution</span>
+            <h1>The v1.9–v1.10 Milestone</h1>
+            <p class="lead">The founding idea has always been <em>see entities, not coordinates</em>. v1.9 and v1.10 carry it to the two surfaces that resisted it longest: the browser DOM — now targeted by meaning, not by CSS selector — and the apps with no accessible surface at all, where a single act now confirms its own result and points at what to do next.</p>
+          </div>
+          <div class="hero-visual" style="padding-top: 0;">
+            <div class="mermaid-wrap" style="width: 100%;">
+              <pre class="mermaid">graph LR
+    subgraph v140["v1.4: Delivery verified"]
+        G[Delivery verification]
+    end
+
+    subgraph v1518["v1.5–v1.8: Completion &amp; reach"]
+        K[terminal exit code]
+        J[excel VBA bridge]
+    end
+
+    subgraph v19["v1.9: Target by meaning"]
+        N[browser by text / role / label]
+        O[modal-aware clicks]
+    end
+
+    subgraph v110["v1.10: Confirm in one call"]
+        P[roiCapture on visual-only]
+        Q[changed-region crop + preview]
+    end
+
+    v140 --&gt; v1518 --&gt; v19 --&gt; v110
+
+    classDef stable fill:#e8f1ff,stroke:#3b6db3,color:#183257;
+    classDef fresh fill:#d7f2ed,stroke:#1f8a70,color:#0e3b30;
+    class G,K,J stable;
+    class N,O,P,Q fresh;</pre>
+            </div>
+          </div>
+        </section>
+
+        <div class="article-layout">
+          <div class="article-main">
+            <section class="article-card">
+              <span class="label warm">The shift</span>
+              <h2>Two surfaces still addressed by location, not meaning.</h2>
+              <p>By v1.8 the act-and-observe loop was trustworthy: a click reached a live target, a command's completion and exit code were known, and visual verification no longer raced. Two friction points remained, at opposite ends of the spectrum. On the browser, targeting was still <em>positional</em> — <code>browser_click</code> took a CSS selector, a brittle structural path that breaks the moment the markup shifts. And on a <em>visual-only</em> target — an Electron or PWA app, a game, a custom-drawn canvas, a Remote Desktop window — confirming an act meant leaving it: a separate <code>desktop_state</code> and <code>screenshot</code>, then a re-<code>desktop_discover</code>. Three round-trips to confirm one click.</p>
+            </section>
+
+            <section class="article-card">
+              <span class="label">Key Evolution: Target by meaning (v1.9)</span>
+              <h2>Semantic targeting reaches the browser.</h2>
+              <p>v1.9 lets the browser tools name an element by what it <em>means</em> instead of where it sits in the markup:</p>
+              <pre><code>browser_click({ by: "text", pattern: "Sign in" })
+browser_fill({ by: "ariaLabel", pattern: "Search", value: "mcp" })</code></pre>
+              <p><code>by</code> accepts <code>text</code>, <code>role</code>, or <code>ariaLabel</code>; <code>pattern</code> is what to match. The resolver gathers every candidate, and if exactly one matches it acts — if several match, it <strong>stops and reports the ambiguity</strong> rather than clicking a guess. The same release teaches the browser to tell a real modal dialog from an ordinary navigation drawer: <code>browser_overview</code> reports a machine-readable <code>modal</code> state, and <code>browser_click</code> refuses to click <em>through</em> a blocking dialog onto its backdrop. It is "see entities, not coordinates," finally applied to the surface that always had the entities.</p>
+            </section>
+
+            <section class="article-card">
+              <span class="label">Key Evolution: Confirm in one call (v1.10)</span>
+              <h2>A visual-only act that confirms itself.</h2>
+              <p>v1.10 turns to the other extreme — the targets with <em>no</em> structure to address. When you act on a visual-only target, a successful <code>desktop_act</code> can now bundle a <code>roiCapture</code> straight into its response:</p>
+              <pre><code>desktop_act({ lease, action: "click", returnCapture: "on-change" })
+// → { ok: true, diff: [ … ],
+//     roiCapture: { somImage, entities, roi, source } }</code></pre>
+              <ul>
+                <li><strong><code>somImage</code></strong> — a base64 PNG cropped to <em>just the region that changed</em>, not the whole window, so you can see the result of your action.</li>
+                <li><strong><code>entities</code></strong> — a lightweight, read-only preview of the labels and controls now visible in that region: the next targets, surfaced without a separate discover.</li>
+                <li><strong><code>roi</code> / <code>source</code></strong> — where the crop came from.</li>
+              </ul>
+              <p>That folds the old three round-trips — act, then <code>desktop_state</code>, then <code>screenshot</code> — into <strong>one call</strong>. A <code>returnCapture</code> option controls it: <code>"on-change"</code> (the default for visual-only targets) attaches the capture only when the screen actually changed; <code>"always"</code> attaches it on any successful act; <code>"never"</code> suppresses it. The preview <code>entities</code> carry no lease — they are a preview, not a handle — so you re-run <code>desktop_discover</code> to act on one, exactly as before.</p>
+            </section>
+
+            <section class="article-card">
+              <span class="label">What keeps it honest</span>
+              <h2>Scoped to where it pays, and never a false alarm.</h2>
+              <p>It is <strong>scoped to visual-only targets</strong>: on a structured target — a browser tab over the DevTools Protocol, an accessibility-rich native window — no <code>roiCapture</code> is attached, because there <code>desktop_state</code> and <code>desktop_discover</code> are cheaper and exact. Spending pixels there would be a regression, not a feature.</p>
+              <p>And the act's <strong>semantic <code>diff</code> stays correct</strong> even though the changed region is re-read visually: a stable on-screen label is never reported as having vanished, because the diff is judged against what was already discovered rather than re-read from a tight crop.</p>
+            </section>
+
+            <section class="article-card">
+              <span class="label warm">Compatibility</span>
+              <h2>Additive, and paid for only on request.</h2>
+              <p>The browser <code>by</code>/<code>pattern</code> targeting is new input on existing tools; the selector path is unchanged. <code>roiCapture</code> is additive and opt-in via <code>returnCapture</code>, never attached on structured targets, so existing callers see identical responses. The new capabilities are paid for only by callers who ask for them.</p>
+              <div class="hero-actions">
+                <a class="button primary" href="https://github.com/Harusame64/desktop-touch-mcp/blob/main/CHANGELOG.md">View Full Changelog</a>
+                <a class="button secondary" href="./v1.8-milestone.html">Read the v1.8 Milestone</a>
+              </div>
+            </section>
+          </div>
+
+          <aside class="article-aside">
+            <div class="aside-card">
+              <h3>Why these together</h3>
+              <p>Both releases are the same move aimed at the surfaces that resisted it longest: target by meaning everywhere — a browser element by its text/role/label, a native entity by its lease — and carry the evidence forward, so the step that acts hands the next step what it needs. Heavy visual capture appears only where there is no cheaper truth, and only when something actually changed.</p>
+              <h3>Release span</h3>
+              <p>The work landed across the v1.9 series and v1.10.0. The full sequence is in the changelog.</p>
+              <h3>Related pages</h3>
+              <ul>
+                <li><a href="../index.html">Project top</a></li>
+                <li><a href="./v1.8-milestone.html">v1.8 milestone</a></li>
+                <li><a href="./v1.4-milestone.html">v1.4 milestone</a></li>
+                <li><a href="./v1.2-milestone.html">v1.2 milestone</a></li>
+                <li><a href="./v1.0-milestone.html">v1.0 milestone</a></li>
+                <li><a href="./beyond-coordinate-roulette.html">Beyond Coordinate Roulette</a></li>
+              </ul>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="site-shell">
+        <span>v1.10 Milestone Article</span>
+        <span>&copy; <span data-year></span> experimental interface work</span>
+      </div>
+    </footer>
+  </body>
+</html>

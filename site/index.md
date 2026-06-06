@@ -104,7 +104,7 @@ On a target the accessibility tree can't describe — an Electron or PWA app, a 
 
 ### v1.9: Semantic Targeting Reaches the Browser
 The browser tools stop leaning on brittle CSS selectors. `browser_click` and `browser_fill` can now target an element by what it *means* (`by:'text' | 'role' | 'ariaLabel'` + a `pattern`), resolving to a single actionable target and **stopping** — rather than guessing — when the match is ambiguous. The same release teaches the browser to tell a real modal dialog from a navigation drawer: `browser_overview` reports a machine-readable `modal` state, and `browser_click` refuses to click *through* a blocking dialog instead of landing on its backdrop. It is "see entities, not coordinates" applied to the web.
-- [Read the v1.10 Milestone Article](./articles/v1.10-milestone.html) (covers v1.9–v1.10) · [v1.9.0 release notes](https://github.com/Harusame64/desktop-touch-mcp/releases/tag/v1.9.0)
+- [Read the v1.9–v1.10 Milestone Article](./articles/v1.10-milestone.html) · [v1.9.0 release notes](https://github.com/Harusame64/desktop-touch-mcp/releases/tag/v1.9.0)
 
 ### v1.8: From Delivery to Completion, and Reaching Deeper Into Apps
 The v1.5–v1.8 series extend trustworthy *delivery* into trustworthy *completion*. `terminal(action='run')` can now wait for a command to actually finish and report its real exit code (`until:{mode:'exit'}`), the new `excel` tool runs VBA macros over COM where formula-only tools can't, and the act-and-observe loop is hardened with race-free visual verification, idle-aware CPU dormancy, a diagnostic event log, and a deliberate-dwell emergency stop.
