@@ -44,6 +44,7 @@ vi.mock("../../src/engine/window-cache.js", () => ({
   findContainingWindow: vi.fn(() => null),
   getCachedWindowByTitle: vi.fn(() => null),
   computeWindowDelta: vi.fn(() => null),
+  getSnapshot: vi.fn(() => null),
 }));
 
 vi.mock("../../src/tools/_action-guard.js", () => ({

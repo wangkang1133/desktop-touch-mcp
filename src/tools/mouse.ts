@@ -14,8 +14,8 @@ import {
   findContainingWindow,
   getCachedWindowByTitle,
   computeWindowDelta,
-  saveSnapshot,
   getSnapshot,
+  WINDOW_CACHE_TTL_EXPORTED_MS,
 } from "../engine/window-cache.js";
 import { getElementBounds } from "../engine/uia-bridge.js";
 import { captureWindowRawAndHash } from "../engine/layer-buffer.js";
@@ -126,7 +126,12 @@ async function applyHoming(
     screenshotRegion = getSnapshot(windowTitle);
     if (!screenshotRegion) {
       const cachedBefore = getCachedWindowByTitle(windowTitle);
-      if (cachedBefore) {
+      // Honour the main cache's 60s stale guard (same window the snapshot path
+      // omits): a cache entry older than CACHE_TTL_MS may point at a recycled
+      // HWND / pre-move layout, so falling back to it for the manual delta below
+      // — which bypasses computeWindowDelta()'s own staleness check — could apply
+      // a bogus offset. Skip stale entries and let the standard path handle it.
+      if (cachedBefore && Date.now() - cachedBefore.timestamp <= WINDOW_CACHE_TTL_EXPORTED_MS) {
         screenshotRegion = { ...cachedBefore.region };
       }
     }

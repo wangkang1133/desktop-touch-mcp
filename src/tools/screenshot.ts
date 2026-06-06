@@ -852,6 +852,17 @@ export const screenshotHandler = async (args: {
         return failWith(`Window not found: "${effectiveTitle}"`, "screenshot", { windowTitle: effectiveTitle });
       }
 
+      // Populate caches for homing. This is the primary coordinate-copy path
+      // (dotByDot=true / detail='image' single-window capture), so it must seed
+      // homing just like detail='text'/'ocr' do:
+      //   - updateWindowCache gives applyHoming a live HWND to resolve at click
+      //     time (getCachedWindowByTitle), and
+      //   - saveSnapshot preserves this screenshot-time window position so the
+      //     delta survives focus_window / window_dock mutating the main cache
+      //     between this capture and the follow-up mouse_click.
+      updateWindowCache(enumWindowsInZOrder());
+      saveSnapshot(effectiveTitle, windowRegion);
+
       let originX = windowRegion.x;
       let originY = windowRegion.y;
 
