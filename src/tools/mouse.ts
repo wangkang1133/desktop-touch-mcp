@@ -14,6 +14,8 @@ import {
   findContainingWindow,
   getCachedWindowByTitle,
   computeWindowDelta,
+  saveSnapshot,
+  getSnapshot,
 } from "../engine/window-cache.js";
 import { getElementBounds } from "../engine/uia-bridge.js";
 import { captureWindowRawAndHash } from "../engine/layer-buffer.js";
@@ -115,11 +117,18 @@ async function applyHoming(
   // window position. If we call updateWindowCache() before computeWindowDelta(),
   // the cache is overwritten with the CURRENT position and the delta is always
   // zero — homing correction is silently disabled.
+  //
+  // Prefer the snapshot cache (set by screenshot tools, survives external focus/
+  // dock calls) over the regular cache (mutated by updateWindowCache in Tier 2
+  // and by other tools like focus_window / window_dock).
   let screenshotRegion: { x: number; y: number; width: number; height: number } | null = null;
   if (windowTitle) {
-    const cachedBefore = getCachedWindowByTitle(windowTitle);
-    if (cachedBefore) {
-      screenshotRegion = { ...cachedBefore.region };
+    screenshotRegion = getSnapshot(windowTitle);
+    if (!screenshotRegion) {
+      const cachedBefore = getCachedWindowByTitle(windowTitle);
+      if (cachedBefore) {
+        screenshotRegion = { ...cachedBefore.region };
+      }
     }
   }
 
