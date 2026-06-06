@@ -1488,9 +1488,10 @@ async function attemptSelectorActionabilityRescue(args: {
   port: number;
   scrollIntoView?: boolean;
   guardAlreadyRun?: boolean;
+  narrate?: string;
   perceptionEnv?: import("../engine/perception/types.js").PostPerception;
 }): Promise<ToolResult> {
-  const { selector, tabId, port, scrollIntoView, guardAlreadyRun } = args;
+  const { selector, tabId, port, scrollIntoView, guardAlreadyRun, narrate } = args;
   const ctx = { selector };
   let perceptionEnv = args.perceptionEnv;
 
@@ -1510,6 +1511,19 @@ async function attemptSelectorActionabilityRescue(args: {
       return failWith(new Error(`AutoGuardBlocked: ${ag.summary.next}`), "browser_click", { _perceptionForPost: ag.summary });
     }
     perceptionEnv = ag.summary;
+  }
+
+  // CDP snapshot before the click for narrate:"rich" (parity with the selector
+  // and by-axis paths — a rescued click must not silently drop the requested rich
+  // navigation diff, Codex impl P2). Captured here so BOTH the P1 and P2 rescue
+  // entry points get it (the P1 precheck catch reaches the rescue before the
+  // handler's own beforeUrl capture).
+  let beforeUrl: string | null = null;
+  if (narrate === "rich") {
+    try {
+      const ctx0 = await getTabContext(tabId ?? null, port);
+      beforeUrl = ctx0.url ?? null;
+    } catch { /* ignore */ }
   }
 
   // scrollIntoView two-pass: identify the unique visible candidate (even
@@ -1556,6 +1570,27 @@ async function attemptSelectorActionabilityRescue(args: {
 
   const verifyDelivery = await osClickAndVerify(outcome.physical.x, outcome.physical.y, null, tabId ?? null, port);
   const tabCtx = await getTabContext(tabId ?? null, port);
+
+  // Rich block (narrate:"rich") — same CDP navigation-diff shape as the selector
+  // and by-axis paths (Codex impl P2).
+  let richBlock: RichBlock | undefined;
+  if (narrate === "rich" && beforeUrl !== null) {
+    try {
+      const afterUrl = tabCtx.url ?? null;
+      richBlock = {
+        appeared: [],
+        disappeared: [],
+        valueDeltas: [],
+        diffSource: "cdp",
+        ...(beforeUrl !== afterUrl && afterUrl
+          ? { navigation: { fromUrl: beforeUrl, toUrl: afterUrl } }
+          : {}),
+      };
+    } catch {
+      richBlock = { appeared: [], disappeared: [], valueDeltas: [], diffSource: "none", diffDegraded: "timeout" };
+    }
+  }
+
   return ok({
     ok: true,
     clicked: selector,
@@ -1565,6 +1600,7 @@ async function attemptSelectorActionabilityRescue(args: {
     activeTab: { id: tabCtx.id, title: tabCtx.title, url: tabCtx.url },
     readyState: tabCtx.readyState,
     hints: { verifyDelivery },
+    ...(richBlock ? { _richForPost: richBlock } : {}),
     ...(perceptionEnv && { _perceptionForPost: perceptionEnv }),
   });
 }
@@ -1647,7 +1683,7 @@ export const browserClickElementHandler = async ({
         if (e instanceof ElementZeroSizeError) {
           return await attemptSelectorActionabilityRescue({
             selector: effectiveSelector, tabId: effectiveTabId, port,
-            scrollIntoView, guardAlreadyRun: false,
+            scrollIntoView, guardAlreadyRun: false, narrate,
           });
         }
         throw e;
@@ -1714,7 +1750,7 @@ export const browserClickElementHandler = async ({
       if (e instanceof ElementZeroSizeError) {
         return await attemptSelectorActionabilityRescue({
           selector: effectiveSelector, tabId: effectiveTabId, port,
-          scrollIntoView, guardAlreadyRun: true, perceptionEnv: perceptionEnvBrowser,
+          scrollIntoView, guardAlreadyRun: true, narrate, perceptionEnv: perceptionEnvBrowser,
         });
       }
       throw e;

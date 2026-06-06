@@ -1090,7 +1090,11 @@ export async function resolveBrowserActionTarget(args: ResolveActionArgs): Promi
 // SAME deterministic candidate pool as the resolve gather (identical
 // querySelectorAll order + scoring via candidatePoolJs), re-select `top[index]`,
 // and scroll the live node — which honours nested scroll containers, unlike a
-// window-only scroll. Same re-gather+index determinism as buildFillActJs.
+// window-only scroll. Same re-gather+index DETERMINISM as buildFillActJs — but
+// (unlike fill) NO identity gate: scroll is best-effort and writes nothing, and
+// the caller's 2nd resolve pass re-gathers + re-gates actionability fresh, so a
+// DOM mutation between resolve and scroll degrades to a wasted scroll + a
+// noActionable+candidates stop (safe), never a wrong action.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
