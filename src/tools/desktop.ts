@@ -733,6 +733,36 @@ export class DesktopFacade {
     };
   }
 
+  /**
+   * ADR-024 Seed-2 S5b (D6) — true when the most recent discover for this view
+   * produced any `visual_gpu`-sourced entity. The fold replaces the post
+   * snapshot with an OCR-only re-observation; a `visual_gpu` candidate the OCR
+   * lane cannot reproduce (e.g. an icon with no text) would then read as removed
+   * in the diff. So when this is true the handler does NOT fold — it keeps the
+   * S5 2-OCR path (full `composeCandidates` post preserves every lane). The
+   * fold is limited to the OCR-only visual-only targets it can serve faithfully.
+   */
+  discoverHasVisualGpuForViewId(viewId: string): boolean {
+    const session = this.registry.getByViewId(viewId, this.opts.nowFn);
+    if (!session) return false;
+    return session.entities.some((e) => e.sources.includes("visual_gpu"));
+  }
+
+  /**
+   * ADR-024 Seed-2 S5b — the EXACT `target.id` the discover OCR lane used for
+   * this view (`ocr-provider.ts`: `target.hwnd ?? target.windowTitle ?? "@active"`).
+   * The fold's post-OCR candidates must carry the SAME `target.id` so their
+   * entityId (`sha1(window:targetId | label | snapRect)`) matches the
+   * pre-snapshot — otherwise the touched entity reads as `entity_disappeared`
+   * (R1). Returns `null` when the session is gone (handler then skips the fold).
+   */
+  resolveOcrTargetIdForViewId(viewId: string): string | null {
+    const session = this.registry.getByViewId(viewId, this.opts.nowFn);
+    const target = session?.lastTarget;
+    if (!target) return null;
+    return target.hwnd ?? target.windowTitle ?? "@active";
+  }
+
   validateLeaseOnly(lease: EntityLease): LeaseValidationResult {
     const session = this.registry.getByViewId(lease.viewId, this.opts.nowFn);
     if (!session) {
