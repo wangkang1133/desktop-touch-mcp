@@ -338,56 +338,56 @@
     },
     {
       "file": "src/tools/mouse.ts",
-      "line": 411,
+      "line": 475,
       "tool": "mouse_move",
       "errKind": "identifier",
       "contextShape": "none"
     },
     {
       "file": "src/tools/mouse.ts",
-      "line": 529,
+      "line": 593,
       "tool": "mouse_click",
       "errKind": "new-error",
       "contextShape": "object-plain"
     },
     {
       "file": "src/tools/mouse.ts",
-      "line": 703,
+      "line": 767,
       "tool": "mouse_click",
       "errKind": "identifier",
       "contextShape": "none"
     },
     {
       "file": "src/tools/mouse.ts",
-      "line": 752,
+      "line": 816,
       "tool": "mouse_drag",
       "errKind": "new-error",
       "contextShape": "object-plain"
     },
     {
       "file": "src/tools/mouse.ts",
-      "line": 917,
+      "line": 981,
       "tool": "mouse_drag",
       "errKind": "identifier",
       "contextShape": "none"
     },
     {
       "file": "src/tools/mouse.ts",
-      "line": 1421,
+      "line": 1485,
       "tool": "scroll",
       "errKind": "new-error",
       "contextShape": "object-plain"
     },
     {
       "file": "src/tools/mouse.ts",
-      "line": 1563,
+      "line": 1627,
       "tool": "scroll",
       "errKind": "identifier",
       "contextShape": "none"
     },
     {
       "file": "src/tools/mouse.ts",
-      "line": 1572,
+      "line": 1636,
       "tool": "get_cursor_position",
       "errKind": "identifier",
       "contextShape": "none"
@@ -436,21 +436,21 @@
     },
     {
       "file": "src/tools/screenshot.ts",
-      "line": 847,
+      "line": 852,
       "tool": "screenshot",
       "errKind": "string-literal",
       "contextShape": "object-plain"
     },
     {
       "file": "src/tools/screenshot.ts",
-      "line": 1074,
+      "line": 1090,
       "tool": "screenshot",
       "errKind": "identifier",
       "contextShape": "none"
     },
     {
       "file": "src/tools/screenshot.ts",
-      "line": 1193,
+      "line": 1213,
       "tool": "get_screen_info",
       "errKind": "identifier",
       "contextShape": "none"
