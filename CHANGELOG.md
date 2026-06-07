@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.10.2] - 2026-06-07 — `mouse_click` homing correction now works after a window moves
+
+### Fixed
+
+- **`mouse_click` now correctly re-aims at a window that moved since your last
+  screenshot.** When you pass `windowTitle` (so the click can auto-focus and
+  track the window), homing is meant to detect that the window shifted and offset
+  your click coordinates by the same amount. A logic bug disabled this whenever a
+  `windowTitle` was supplied: the window's pre-move position was overwritten
+  before the offset was computed, so the correction collapsed to zero and the
+  click landed at the stale coordinates. Now the screenshot-time position is
+  preserved in a separate cache that focusing or docking the window can't clobber,
+  so clicks land on target even if the window was moved, docked, or brought to the
+  front between your screenshot and the click. This also covers the common flow of
+  `screenshot(dotByDot=true, windowTitle=…)` → `mouse_click(…, windowTitle=…)`.
+
 ## [1.10.1] - 2026-06-06 — `browser_click` recovers from hidden duplicate elements
 
 ### Fixed
