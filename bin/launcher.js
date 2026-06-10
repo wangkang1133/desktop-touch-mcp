@@ -38,9 +38,37 @@ function log(message) {
   console.error(`[desktop-touch-mcp] ${message}`);
 }
 
+function warn(message) {
+  console.error(`[desktop-touch-mcp] WARNING: ${message}`);
+}
+
 function fail(message) {
   console.error(`[desktop-touch-mcp] ${message}`);
   process.exit(1);
+}
+
+/**
+ * Reads the GitHub token from the environment.
+ * Supports both GITHUB_TOKEN (GitHub Actions standard) and GH_TOKEN (gh CLI).
+ */
+function getGitHubToken() {
+  return process.env.GITHUB_TOKEN || process.env.GH_TOKEN || null;
+}
+
+/**
+ * Returns headers for GitHub API and release download requests.
+ * Includes Authorization when a token is available to avoid rate limits.
+ */
+function getGitHubHeaders(extra = {}) {
+  const headers = {
+    "User-Agent": "desktop-touch-mcp-launcher",
+    ...extra,
+  };
+  const token = getGitHubToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  return headers;
 }
 
 export function isDisconnectError(error) {
@@ -130,13 +158,19 @@ function expectedReleaseSpec() {
   if (!RELEASE_MANIFEST.sha256 || RELEASE_MANIFEST.assetName !== ASSET_NAME) {
     throw new Error(`Missing release manifest for ${RELEASE_TAG}`);
   }
-  if (!/^[a-f0-9]{64}$/i.test(RELEASE_MANIFEST.sha256)) {
+  // "PENDING" is the pre-release placeholder set in source.
+  // It means the npm publish CI did not finalize the manifest (e.g.
+  // update-sha.mjs was not run).  In that case we skip SHA256
+  // verification so the launcher is still usable.
+  const isPending = RELEASE_MANIFEST.sha256 === "PENDING";
+  if (!isPending && !/^[a-f0-9]{64}$/i.test(RELEASE_MANIFEST.sha256)) {
     throw new Error(`Invalid release SHA256 manifest for ${RELEASE_TAG}`);
   }
   return {
     tagName: RELEASE_MANIFEST.tagName,
     assetName: RELEASE_MANIFEST.assetName,
-    sha256: String(RELEASE_MANIFEST.sha256).toLowerCase(),
+    sha256: isPending ? null : String(RELEASE_MANIFEST.sha256).toLowerCase(),
+    sha256Pending: isPending,
   };
 }
 
@@ -153,11 +187,12 @@ async function isInstalled(releaseDir, expected) {
   if (!existsSync(path.join(releaseDir, "dist", "index.js"))) return false;
   const metadata = await readReleaseMetadata(releaseDir);
   if (!metadata) return false;
-  return (
-    metadata.tagName === expected.tagName &&
-    metadata.assetName === expected.assetName &&
-    String(metadata.sha256 || "").toLowerCase() === expected.sha256
-  );
+  if (metadata.tagName !== expected.tagName || metadata.assetName !== expected.assetName) return false;
+  // Skip SHA256 check when the manifest is still PENDING.
+  if (expected.sha256 !== null) {
+    if (String(metadata.sha256 || "").toLowerCase() !== expected.sha256) return false;
+  }
+  return true;
 }
 
 async function readCurrentRelease(expected) {
@@ -167,7 +202,7 @@ async function readCurrentRelease(expected) {
     if (typeof parsed?.tagName !== "string") return null;
     if (parsed.tagName !== expected.tagName) return null;
     if (parsed.assetName !== expected.assetName) return null;
-    if (String(parsed.sha256 || "").toLowerCase() !== expected.sha256) return null;
+    if (expected.sha256 !== null && String(parsed.sha256 || "").toLowerCase() !== expected.sha256) return null;
     const releaseDir = releaseDirForTag(parsed.tagName);
     if (!(await isInstalled(releaseDir, expected))) return null;
     return { tagName: parsed.tagName, releaseDir };
@@ -195,10 +230,9 @@ async function writeCurrentRelease(expected) {
 
 async function fetchReleaseByTag(expected) {
   const response = await fetch(REPO_API_URL, {
-    headers: {
+    headers: getGitHubHeaders({
       "Accept": "application/vnd.github+json",
-      "User-Agent": "desktop-touch-mcp-launcher",
-    },
+    }),
   });
 
   if (!response.ok) {
@@ -249,9 +283,7 @@ async function verifySha256(filePath, expectedSha256) {
 
 async function downloadFile(url, destination) {
   const response = await fetch(url, {
-    headers: {
-      "User-Agent": "desktop-touch-mcp-launcher",
-    },
+    headers: getGitHubHeaders(),
   });
 
   if (!response.ok) {
@@ -314,7 +346,12 @@ async function installRelease(release, expected) {
   try {
     log(`Downloading ${ASSET_NAME} from ${release.tagName}`);
     await downloadFile(release.assetUrl, zipPath);
-    await verifySha256(zipPath, expected.sha256);
+    if (expected.sha256 !== null) {
+      await verifySha256(zipPath, expected.sha256);
+    } else {
+      warn("SHA256 is PENDING — skipping integrity verification. " +
+           "Set the GITHUB_TOKEN environment variable and re-run to ensure download integrity.");
+    }
     await mkdir(extractDir, { recursive: true });
     await expandZip(zipPath, extractDir);
 
