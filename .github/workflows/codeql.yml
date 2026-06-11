@@ -21,6 +21,12 @@ on:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
+    # Skip on fork PRs: GitHub downgrades GITHUB_TOKEN to near-anonymous access
+    # for PRs from forks regardless of the permissions block, so
+    # codeql-action/init fails with "HttpError: Requires authentication"
+    # (observed on PR #449). The push to main after merge still runs the full
+    # analysis, so no commit lands unscanned. Guard suggested by @licat2023.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       actions: read
