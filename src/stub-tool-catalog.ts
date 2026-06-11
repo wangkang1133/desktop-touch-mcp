@@ -1359,9 +1359,8 @@ export const STUB_TOOL_CATALOG: StubToolCatalogEntry[] = [
           "default": "auto"
         },
         "ocrLanguage": {
-          "description": "BCP-47 language tag for the OCR engine (e.g. 'ja', 'en-US'). Used when detail='text' (OCR fallback) or detail='ocr' (direct OCR).",
-          "type": "string",
-          "default": "ja"
+          "description": "BCP-47 language tag for the OCR engine (e.g. 'ja', 'en-US'). Auto-detects from system locale when omitted. Used when detail='text' (OCR fallback) or detail='ocr' (direct OCR).",
+          "type": "string"
         },
         "preprocessPolicy": {
           "description": "OCR preprocessing scale policy for detail='som' and OCR fallback paths. 'auto' (default): clamp scale to 1 on OOM (>8MP) or high-DPI (≥150%). 'aggressive': relaxes DPI clamp to 175%, preserving upscale on 150%-DPI monitors (e.g. Outlook PWA). Also auto-enables adaptive binarization. 'minimal': always scale=1 regardless of DPI/resolution.",
