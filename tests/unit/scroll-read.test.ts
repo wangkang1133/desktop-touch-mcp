@@ -236,8 +236,9 @@ describe("scrollReadHandler (mocked)", () => {
         .mockResolvedValueOnce({ words: page3, origin: { x: 0, y: 0 } }),
       ocrWordsToLines: (words: Array<{ text: string; bbox: { x: number; y: number; width: number; height: number } }>) =>
         words.map((w) => w.text).join("\n"),
+      detectOcrLanguage: () => "en",
     }));
-
+    
     vi.doMock("../../src/engine/nutjs.js", () => ({
       keyboard: {
         pressKey: vi.fn().mockResolvedValue(undefined),
@@ -290,8 +291,9 @@ describe("scrollReadHandler (mocked)", () => {
     vi.doMock("../../src/engine/ocr-bridge.js", () => ({
       recognizeWindowByHwnd: vi.fn().mockResolvedValue({ words, origin: { x: 0, y: 0 } }),
       ocrWordsToLines: (ws: Array<{ text: string }>) => ws.map((w) => w.text).join("\n"),
+      detectOcrLanguage: () => "en",
     }));
-
+    
     vi.doMock("../../src/engine/nutjs.js", () => ({
       keyboard: {
         pressKey: vi.fn().mockResolvedValue(undefined),
@@ -345,8 +347,9 @@ describe("scrollReadHandler (mocked)", () => {
         return { words: makeWords([`Line${callCount}`]), origin: { x: 0, y: 0 } };
       }),
       ocrWordsToLines: (ws: Array<{ text: string }>) => ws.map((w) => w.text).join("\n"),
+      detectOcrLanguage: () => "en",
     }));
-
+    
     vi.doMock("../../src/engine/nutjs.js", () => ({
       keyboard: {
         pressKey: vi.fn().mockResolvedValue(undefined),
@@ -393,8 +396,9 @@ describe("scrollReadHandler (mocked)", () => {
     vi.doMock("../../src/engine/ocr-bridge.js", () => ({
       recognizeWindowByHwnd: vi.fn().mockResolvedValue({ words: [], origin: { x: 0, y: 0 } }),
       ocrWordsToLines: () => "",
+      detectOcrLanguage: () => "en",
     }));
-
+    
     vi.doMock("../../src/engine/nutjs.js", () => ({
       keyboard: {
         pressKey: vi.fn().mockResolvedValue(undefined),
@@ -444,8 +448,9 @@ describe("scrollReadHandler (mocked)", () => {
     vi.doMock("../../src/engine/ocr-bridge.js", () => ({
       recognizeWindowByHwnd: vi.fn().mockRejectedValue(new Error("must not be called")),
       ocrWordsToLines: () => "",
+      detectOcrLanguage: () => "en",
     }));
-
+    
     vi.doMock("../../src/engine/nutjs.js", () => ({
       keyboard: {
         pressKey: vi.fn().mockResolvedValue(undefined),
@@ -498,6 +503,7 @@ describe("scrollReadHandler (mocked)", () => {
         .mockResolvedValueOnce({ words: page1, origin: { x: 0, y: 0 } })
         .mockResolvedValueOnce({ words: page2, origin: { x: 0, y: 0 } }),
       ocrWordsToLines: (ws: Array<{ text: string }>) => ws.map((w) => w.text).join("\n"),
+      detectOcrLanguage: () => "en",
     }));
 
     const pressKeyMock = vi.fn().mockResolvedValue(undefined);
@@ -558,8 +564,9 @@ describe("scrollReadHandler (mocked)", () => {
         .mockResolvedValueOnce({ words: page1, origin: { x: 0, y: 0 } })
         .mockResolvedValueOnce({ words: page2, origin: { x: 0, y: 0 } }),
       ocrWordsToLines: (ws: Array<{ text: string }>) => ws.map((w) => w.text).join("\n"),
+      detectOcrLanguage: () => "en",
     }));
-
+    
     vi.doMock("../../src/engine/nutjs.js", () => ({
       keyboard: { pressKey: pressKeyMock, releaseKey: releaseKeyMock },
     }));
@@ -618,8 +625,9 @@ describe("scrollReadHandler (mocked)", () => {
         .mockResolvedValueOnce({ words: page1, origin: { x: 0, y: 0 } })
         .mockResolvedValueOnce({ words: page2, origin: { x: 0, y: 0 } }),
       ocrWordsToLines: (ws: Array<{ text: string }>) => ws.map((w) => w.text).join("\n"),
+      detectOcrLanguage: () => "en",
     }));
-
+    
     vi.doMock("../../src/engine/nutjs.js", () => ({
       keyboard: { pressKey: pressKeyMock, releaseKey: vi.fn().mockResolvedValue(undefined) },
     }));
@@ -678,8 +686,9 @@ describe("scrollReadHandler (mocked)", () => {
         .mockResolvedValueOnce({ words: page1, origin: { x: 0, y: 0 } })
         .mockResolvedValueOnce({ words: page2, origin: { x: 0, y: 0 } }),
       ocrWordsToLines: (ws: Array<{ text: string }>) => ws.map((w) => w.text).join("\n"),
+      detectOcrLanguage: () => "en",
     }));
-
+    
     vi.doMock("../../src/engine/nutjs.js", () => ({
       keyboard: {
         pressKey: vi.fn().mockResolvedValue(undefined),
@@ -734,8 +743,9 @@ describe("scrollReadHandler (mocked)", () => {
     vi.doMock("../../src/engine/ocr-bridge.js", () => ({
       recognizeWindowByHwnd: vi.fn().mockRejectedValue(new Error("PrintWindow failed: window closed")),
       ocrWordsToLines: () => "",
+      detectOcrLanguage: () => "en",
     }));
-
+    
     vi.doMock("../../src/engine/nutjs.js", () => ({
       keyboard: {
         pressKey: vi.fn().mockResolvedValue(undefined),
@@ -791,8 +801,9 @@ describe("scrollReadHandler (mocked)", () => {
         .mockResolvedValueOnce({ words: page2, origin: { x: 0, y: 0 } })
         .mockRejectedValueOnce(new Error("OCR subprocess crashed")),
       ocrWordsToLines: (ws: Array<{ text: string }>) => ws.map((w) => w.text).join("\n"),
+      detectOcrLanguage: () => "en",
     }));
-
+    
     vi.doMock("../../src/engine/nutjs.js", () => ({
       keyboard: {
         pressKey: vi.fn().mockResolvedValue(undefined),

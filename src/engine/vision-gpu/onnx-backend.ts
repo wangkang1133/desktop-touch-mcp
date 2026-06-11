@@ -91,8 +91,11 @@ const winOcrTierInfinity: WinOcrFallbackFn = async (
       .toBuffer();
 
     // Spawn win-ocr.exe and feed PNG bytes (mirrors ocr-bridge.ts::runOcrExe pattern).
+    // Use system locale for OCR language instead of hardcoded "ja".
+    // Detects e.g. "zh" for Chinese Windows, "ja" for Japanese, "en" for English.
+    const ocrLang = Intl.DateTimeFormat().resolvedOptions().locale.split("-")[0]?.toLowerCase() || "ja";
     const stdout = await new Promise<string>((resolve, reject) => {
-      const child = spawn(WIN_OCR_EXE_PATH, ["ja"], { windowsHide: true });
+      const child = spawn(WIN_OCR_EXE_PATH, [ocrLang], { windowsHide: true });
       const timer = setTimeout(() => {
         child.kill();
         reject(new Error("win-ocr.exe timed out (2000ms)"));

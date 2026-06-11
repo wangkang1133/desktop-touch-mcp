@@ -33,6 +33,7 @@ import { TemporalFusion } from "./temporal-fusion.js";
 import { CandidateProducer } from "./candidate-producer.js";
 import { pushDirtySignal } from "./dirty-signal.js";
 import type { SomElement, OcrDictionaryEntry } from "../ocr-bridge.js";
+import { detectOcrLanguage } from "../ocr-bridge.js";
 
 /** Compute the targetKey that both visual-provider and pushDirtySignal use. */
 export function targetKeyFromSpec(target: TargetSpec): string {
@@ -143,7 +144,7 @@ export class OcrVisualAdapter {
         const { runSomPipeline } = await import("../ocr-bridge.js");
         const hwnd = target.hwnd ? BigInt(target.hwnd) : null;
         const title = target.windowTitle ?? "@active";
-        const result = await runSomPipeline(title, hwnd, "ja", 2, "auto", false, dictionary);
+        const result = await runSomPipeline(title, hwnd, detectOcrLanguage(), 2, "auto", false, dictionary);
         elements = result.elements;
       } catch (err) {
         console.error("[ocr-adapter] runSomPipeline failed:", err);
