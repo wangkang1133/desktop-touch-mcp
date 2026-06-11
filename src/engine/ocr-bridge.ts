@@ -224,10 +224,25 @@ export function mergeNearbyWords(words: OcrWord[], gapThreshold = 12): OcrWord[]
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Detect the best OCR language from the Windows system locale via
+ * Intl.DateTimeFormat().resolvedOptions().locale (reads OS preferred language).
+ *
+ * Returns the BCP-47 primary tag verbatim (e.g. "ja", "en", "zh") so
+ * win-ocr.exe / Windows.Media.Ocr can resolve it against whichever language
+ * packs the OS actually has installed. Falls back to "en" only when the locale
+ * is empty (extremely rare; happens with stripped-down container images).
+ */
+export function detectOcrLanguage(): string {
+  const locale = Intl.DateTimeFormat().resolvedOptions().locale;
+  const primary = locale.split("-")[0]?.toLowerCase();
+  return primary || "en";
+}
+
+/**
  * Run Windows.Media.Ocr on a PNG image (provided as base64).
  * Returns words with bounding boxes in IMAGE-LOCAL coordinates.
  */
-export async function runOcr(pngBase64: string, language = "ja"): Promise<OcrWord[]> {
+export async function runOcr(pngBase64: string, language = detectOcrLanguage()): Promise<OcrWord[]> {
   if (!existsSync(EXE_PATH)) {
     throw new Error(
       `win-ocr.exe not found at ${EXE_PATH}. ` +
@@ -253,7 +268,7 @@ export async function runOcr(pngBase64: string, language = "ja"): Promise<OcrWor
 export async function recognizeWindowByHwnd(
   hwnd: unknown,
   region: { x: number; y: number; width: number; height: number },
-  language = "ja",
+  language = detectOcrLanguage(),
 ): Promise<{ words: OcrWord[]; origin: { x: number; y: number } }> {
   const origin = { x: region.x, y: region.y };
 
@@ -293,7 +308,7 @@ export async function recognizeWindowByHwnd(
  */
 export async function recognizeWindow(
   windowTitle: string,
-  language = "ja"
+  language = detectOcrLanguage()
 ): Promise<{ words: OcrWord[]; origin: { x: number; y: number } }> {
   const wins = enumWindowsInZOrder();
   const win = wins.find((w) => w.title.toLowerCase().includes(windowTitle.toLowerCase()));
@@ -653,7 +668,7 @@ export function clusterOcrWords(words: OcrWord[], elementGapThreshold = 35): Som
  *
  * @param windowTitle      Partial window title (same matching convention as UIA calls).
  * @param hwnd             Optional HWND (bigint) — uses enumWindowsInZOrder when null.
- * @param ocrLang          BCP-47 language tag (default "ja").
+ * @param ocrLang          BCP-47 language tag (default: auto-detected from system locale).
  * @param scale            Base upscale factor for OCR preprocessing: 1..4 (default 2).
  * @param preprocessPolicy Controls effective scale selection strategy (default "auto").
  *   "auto"       — current behaviour: clamp to 1 on OOM (>8MP) or high-DPI (≥144dpi).
@@ -669,7 +684,7 @@ export function clusterOcrWords(words: OcrWord[], elementGapThreshold = 35): Som
 export async function runSomPipeline(
   windowTitle: string,
   hwnd?: bigint | null,
-  ocrLang = "ja",
+  ocrLang = detectOcrLanguage(),
   scale = 2,
   preprocessPolicy: "auto" | "aggressive" | "minimal" = "auto",
   adaptive = false,

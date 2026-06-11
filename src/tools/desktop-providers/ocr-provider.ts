@@ -20,6 +20,7 @@ import type { Rect, UiEntityCandidate } from "../../engine/vision-gpu/types.js";
 import type { TargetSpec } from "../../engine/world-graph/session-registry.js";
 import type { ProviderResult } from "../../engine/world-graph/candidate-ingress.js";
 import type { OcrDictionaryEntry } from "../../engine/ocr-bridge.js";
+import { detectOcrLanguage } from "../../engine/ocr-bridge.js";
 import { getOcrVisualAdapter } from "../../engine/vision-gpu/ocr-adapter-registry.js";
 
 export async function fetchOcrCandidates(
@@ -40,7 +41,7 @@ export async function fetchOcrCandidates(
 
   try {
     const { runSomPipeline } = await import("../../engine/ocr-bridge.js");
-    const somResult = await runSomPipeline(windowTitle, hwnd, "ja", 2, "auto", false, dictionary, roi);
+    const somResult = await runSomPipeline(windowTitle, hwnd, detectOcrLanguage(), 2, "auto", false, dictionary, roi);
 
     if (somResult.elements.length === 0) {
       return { candidates: [], warnings: ["ocr_attempted_empty"] };

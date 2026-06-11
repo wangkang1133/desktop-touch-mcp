@@ -6,7 +6,11 @@
  * (scroll.ts). Phase 1: native apps only (browser/CDP in Phase 3).
  */
 
-import { recognizeWindowByHwnd, ocrWordsToLines } from "../engine/ocr-bridge.js";
+import { recognizeWindowByHwnd, ocrWordsToLines, detectOcrLanguage } from "../engine/ocr-bridge.js";
+
+// Re-export for backward compatibility (canonical definition now in ocr-bridge.ts)
+export { detectOcrLanguage };
+
 import { failWith, failCode } from "./_errors.js";
 import { keyboard } from "../engine/nutjs.js";
 import { restoreAndFocusWindow } from "../engine/win32.js";
@@ -18,25 +22,11 @@ import {
 } from "./_resolve-window.js";
 import type { ToolResult } from "./_types.js";
 
+// detectOcrLanguage imported from ../engine/ocr-bridge.js
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Detect the best OCR language from the Windows system locale via
- * Intl.DateTimeFormat().resolvedOptions().locale (reads OS preferred language).
- *
- * Returns the BCP-47 primary tag verbatim (e.g. "ja", "en", "sv", "th") so
- * win-ocr.exe / Windows.Media.Ocr can resolve it against whichever language
- * packs the OS actually has installed — including locales that an in-process
- * allowlist could not anticipate. Falls back to "en" only when the locale is
- * empty (extremely rare; happens with stripped-down container images).
- */
-export function detectOcrLanguage(): string {
-  const locale = Intl.DateTimeFormat().resolvedOptions().locale;
-  const primary = locale.split("-")[0]?.toLowerCase();
-  return primary || "en";
-}
 
 /**
  * Longest suffix of `prev` that equals a prefix of `curr`.
