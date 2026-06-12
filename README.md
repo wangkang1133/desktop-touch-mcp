@@ -790,7 +790,7 @@ For `desktop_discover` warnings (`visual_provider_unavailable`, `visual_provider
 
 ---
 
-## Thank you 🙏
+## 🚀 2,000+ Downloads!
 
 This project just passed **2,000+ downloads**. Huge thanks to everyone who
 tried an experimental desktop-automation MCP server, filed issues, opened PRs,
