@@ -198,7 +198,7 @@ export async function captureWindowBackground(
   hwnd: unknown,
   optsOrMaxDim: CaptureOptions | number = 1280,
   printWindowFlags = 2
-): Promise<CaptureResult> {
+): Promise<CaptureResult & { captureBlocked?: boolean }> {
   const opts: CaptureOptions =
     typeof optsOrMaxDim === "number" ? { maxDimension: optsOrMaxDim } : optsOrMaxDim;
   // ADR-027 — for windows DWM is compositing (visible, non-minimised,
@@ -211,7 +211,17 @@ export async function captureWindowBackground(
   // requests (PW_CLIENTONLY) stay on PrintWindow (Codex review R1+R2).
   const wgc = wgcMatchesFlags(printWindowFlags) ? await captureWindowRawViaWgc(hwnd) : null;
   if (wgc) {
-    return encode(wgc.rawPixels, wgc.width, wgc.height, 4, opts);
+    // WGC frames pass the blank gate inside captureWindowRawViaWgc (full frame),
+    // so a served WGC frame is real content. But when a sub-region is requested
+    // the served crop could still be all-black (e.g. a DRM video area inside a
+    // non-black window) — re-check the crop so captureBlocked reflects the
+    // pixels actually sent (Codex review). With no crop the validated full
+    // frame is non-black by construction → false.
+    const captureBlocked = opts.crop
+      ? isLikelyBlankCapture(wgc.rawPixels, wgc.width, wgc.height, 4, opts.crop).isBlank
+      : false;
+    const encodedWgc = await encode(wgc.rawPixels, wgc.width, wgc.height, 4, opts);
+    return { ...encodedWgc, captureBlocked };
   }
   // Call printWindowToBuffer directly so the original native error (driver
   // failure, DRM-protected surface, etc.) propagates to OCR / SoM callers
@@ -220,7 +230,19 @@ export async function captureWindowBackground(
   // back-compat entry, which should fail loudly when PrintWindow can't run.
   const { data, width, height } = printWindowToBuffer(hwnd, printWindowFlags);
   // data is already RGBA (converted in win32.ts)
-  return encode(data, width, height, 4, opts);
+  // ADR-027 R9/AC8 — background mode's rungs are WGC (when eligible) → PrintWindow.
+  // If WGC did not serve and this PrintWindow frame is all-black, no rung
+  // produced non-black pixels: the result is an unverified black image (either
+  // a genuinely-black window OR uncapturable content — DRM / secure desktop /
+  // hardware overlay; pixels can't tell them apart). Flag it so the handler
+  // surfaces an explicit hedged warning rather than returning a silent black
+  // frame. The check is crop-aware (Codex review): when a sub-region is
+  // requested it reflects the served crop, not the full window. (Only all-black
+  // AND zero-variance qualifies — isLikelyBlankCapture never flags a
+  // dark-but-varied editor / video as blank.)
+  const captureBlocked = isLikelyBlankCapture(data, width, height, 4, opts.crop).isBlank;
+  const encoded = await encode(data, width, height, 4, opts);
+  return { ...encoded, captureBlocked };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -259,17 +281,32 @@ export function captureWindowRawPrintWindow(
  *
  * Sampling: walks the buffer with a fixed stride to keep this O(1) per call,
  * regardless of resolution.
+ *
+ * `crop` (optional, ADR-027 Phase 3 / Codex review): when set, the check is
+ * restricted to that sub-rectangle of the buffer — the "pixels actually sent"
+ * when the caller requested a region. This is stride-aware (it walks the
+ * sub-rect using the full-width row stride), so a black region inside a
+ * non-black window is detected. With no `crop` the full buffer is sampled and
+ * the result is bit-identical to the original 4-arg form. The crop is clamped
+ * to the buffer bounds; an empty clamped crop returns isBlank=false.
  */
 export function isLikelyBlankCapture(
   rawPixels: Buffer,
   width: number,
   height: number,
   channels: 3 | 4,
+  crop?: { x: number; y: number; width: number; height: number },
 ): { isBlank: boolean; reason: "printwindow-all-black" | null } {
   if (width <= 0 || height <= 0 || rawPixels.length < channels) {
     return { isBlank: false, reason: null };
   }
-  const pixelCount = width * height;
+  // Region to sample: the full frame, or the requested crop clamped to bounds.
+  const rx = crop ? Math.max(0, Math.min(crop.x, width)) : 0;
+  const ry = crop ? Math.max(0, Math.min(crop.y, height)) : 0;
+  const rw = crop ? Math.min(crop.width, width - rx) : width;
+  const rh = crop ? Math.min(crop.height, height - ry) : height;
+  if (rw <= 0 || rh <= 0) return { isBlank: false, reason: null };
+  const pixelCount = rw * rh;
   // Sample at most ~4096 pixels regardless of frame size (O(1) per call).
   const sampleCount = Math.min(4096, pixelCount);
   const step = Math.max(1, Math.floor(pixelCount / sampleCount));
@@ -281,7 +318,12 @@ export function isLikelyBlankCapture(
   let allSame = true;
   let sampled = 0;
   for (let p = 0; p < pixelCount; p += step) {
-    const off = p * channels;
+    // Map the linear sample index into the (cropped) region, then to the full
+    // buffer offset via the real row stride (`width`). With no crop this is
+    // exactly `p * channels` (rx=ry=0, rw=width), so behaviour is unchanged.
+    const localY = Math.floor(p / rw);
+    const localX = p - localY * rw;
+    const off = ((ry + localY) * width + (rx + localX)) * channels;
     // RGBA / RGB: take BT.601 luma (R*0.299 + G*0.587 + B*0.114), integer-ish.
     const r = rawPixels[off] ?? 0;
     const g = rawPixels[off + 1] ?? 0;
@@ -370,6 +412,21 @@ export interface CaptureWindowRawResult {
   channels: 3 | 4;
   source: CaptureSource;
   fallbackReason: CaptureFallbackReason;
+  /**
+   * ADR-027 R9/AC8 — true when EVERY capture rung (PrintWindow → WGC → BitBlt)
+   * produced an all-black / zero-variance frame, so NO rung produced non-black
+   * pixels. Pixels alone cannot distinguish a genuinely-black window (a dark
+   * terminal, a black / letterboxed video frame, a freshly-launched GPU app)
+   * from uncapturable content (DRM-protected video, a secure-desktop / UAC
+   * prompt, a hardware-overlay surface) — both yield a uniform black frame.
+   * So this is NOT an assertion that the content is protected; it means "the
+   * returned image is black and unverified — treat it with low confidence."
+   * The ladder is finite (it does not loop); this flags the case where the LAST
+   * rung is also blank instead of returning a black image silently. Callers
+   * surface an explicit (hedged) warning + a `captureBlocked` hint instead of
+   * the misleading "fell back to BitBlt / overlapping windows" text.
+   */
+  captureBlocked: boolean;
 }
 
 /**
@@ -415,6 +472,7 @@ export async function captureWindowRawWithFallback(
         channels: raw.channels,
         source: "printwindow",
         fallbackReason: null,
+        captureBlocked: false,
       };
     }
     fallbackReason = blank.reason;
@@ -436,6 +494,10 @@ export async function captureWindowRawWithFallback(
       channels: wgc.channels,
       source: "wgc",
       fallbackReason,
+      // WGC frames are already run through isLikelyBlankCapture inside
+      // captureWindowRawViaWgc — a blank WGC frame returns null and we never
+      // reach here, so a served WGC frame is real content (not capture-blocked).
+      captureBlocked: false,
     };
   }
   // BitBlt fallback grabs the full window rect, NOT a sub-region. Sub-region
@@ -445,6 +507,21 @@ export async function captureWindowRawWithFallback(
   const image = await screen.grabRegion(grabRegion);
   const rgbImage = await image.toRGB();
   const channels = (rgbImage.hasAlphaChannel ? 4 : 3) as 3 | 4;
+  // ADR-027 R9/AC8 — BitBlt is the LAST rung. We only reach it because
+  // PrintWindow was blank/failed AND WGC did not serve, so if this final frame
+  // is ALSO all-black then NO rung produced non-black pixels: the result is an
+  // unverified black image (either a genuinely-black window OR uncapturable
+  // content — DRM / secure desktop / hardware overlay; pixels can't tell them
+  // apart). Flag it so the caller surfaces an explicit hedged warning instead
+  // of returning a black image silently. An occluded (non-black) BitBlt of an
+  // overlapping window is NOT capture-blocked — it keeps the existing "may show
+  // overlapping windows" hint via fallbackReason.
+  const captureBlocked = isLikelyBlankCapture(
+    rgbImage.data,
+    rgbImage.width,
+    rgbImage.height,
+    channels,
+  ).isBlank;
   return {
     rawPixels: rgbImage.data,
     width: rgbImage.width,
@@ -452,6 +529,7 @@ export async function captureWindowRawWithFallback(
     channels,
     source: "bitblt-fallback",
     fallbackReason,
+    captureBlocked,
   };
 }
 
@@ -467,12 +545,31 @@ export async function captureWindowWithFallback(
   windowRect: { x: number; y: number; width: number; height: number },
   optsOrMaxDim: CaptureOptions | number = 1280,
   flags = 2,
-): Promise<CaptureResult & { source: CaptureSource; fallbackReason: CaptureFallbackReason }> {
+): Promise<
+  CaptureResult & {
+    source: CaptureSource;
+    fallbackReason: CaptureFallbackReason;
+    captureBlocked: boolean;
+  }
+> {
   const opts: CaptureOptions =
     typeof optsOrMaxDim === "number" ? { maxDimension: optsOrMaxDim } : optsOrMaxDim;
   const raw = await captureWindowRawWithFallback(hwnd, windowRect, flags);
   const encoded = await encode(raw.rawPixels, raw.width, raw.height, raw.channels, opts);
-  return { ...encoded, source: raw.source, fallbackReason: raw.fallbackReason };
+  // ADR-027 R9/AC8 (Codex review) — captureBlocked must describe the pixels
+  // actually sent. When a sub-region is requested, encode() crops to opts.crop,
+  // so re-evaluate the blank check over that crop (a black region inside a
+  // non-black window — e.g. a DRM video area — must still flag). With no crop
+  // the full-buffer result the rung already computed is used unchanged.
+  const captureBlocked = opts.crop
+    ? isLikelyBlankCapture(raw.rawPixels, raw.width, raw.height, raw.channels, opts.crop).isBlank
+    : raw.captureBlocked;
+  return {
+    ...encoded,
+    source: raw.source,
+    fallbackReason: raw.fallbackReason,
+    captureBlocked,
+  };
 }
 
 /** Convert a raw RGBA buffer to base64 image. */

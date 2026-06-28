@@ -931,6 +931,7 @@ export const screenshotHandler = async (args: {
       const captureHints: {
         captureSource: CaptureSource;
         captureFallbackReason?: CaptureFallbackReason;
+        captureBlocked?: boolean;
         warnings?: string[];
       } = { captureSource: result.source };
       const localWarnings: string[] = [...screenshotWarnings];
@@ -939,11 +940,28 @@ export const screenshotHandler = async (args: {
         // frame (for source="wgc" it records why PrintWindow was abandoned).
         captureHints.captureFallbackReason = result.fallbackReason;
       }
-      // The occlusion-risk warnings describe the BitBlt fallback ONLY. A WGC
-      // rescue (source="wgc") reads the DWM composition surface and is
-      // occlusion-immune, so it must not inherit the "may show overlapping
-      // windows" text even though it carries a fallbackReason (ADR-027 Phase 2).
-      if (result.source === "bitblt-fallback") {
+      // ADR-027 R9/AC8 — no capture rung produced non-black pixels, so the
+      // returned image is a uniform black frame. Surface that explicitly and
+      // SUPERSEDE the BitBlt "overlapping windows" hint below — a uniformly
+      // black frame is not showing an occluding window. The wording describes
+      // only the OUTCOME (the returned image), NOT which specific rungs ran:
+      // some rungs may have failed (PrintWindow threw) or been skipped (WGC
+      // ineligible/unsupported), so enumerating "PrintWindow + WGC + BitBlt all
+      // returned black" would be a false diagnosis (Codex review). It is also
+      // HEDGED: pixels alone cannot tell a genuinely-black window (dark terminal
+      // / video / fresh GPU app) from uncapturable content (DRM / secure desktop
+      // / hardware overlay), so we do NOT assert the content is protected. Fixed
+      // strings only (CWE-94).
+      if (result.captureBlocked) {
+        captureHints.captureBlocked = true;
+        localWarnings.push(
+          "The captured image is a uniform all-black frame and could not be verified as real window content. The window may legitimately be black (a dark terminal, a black or letterboxed video frame, or a freshly-launched GPU app) OR its content may be uncapturable (DRM-protected video, a secure-desktop / UAC prompt, or a hardware-overlay surface) — treat the image as unverified."
+        );
+      } else if (result.source === "bitblt-fallback") {
+        // The occlusion-risk warnings describe the BitBlt fallback ONLY. A WGC
+        // rescue (source="wgc") reads the DWM composition surface and is
+        // occlusion-immune, so it must not inherit the "may show overlapping
+        // windows" text even though it carries a fallbackReason (ADR-027 Phase 2).
         // Fixed strings only (no variable interpolation — CWE-94 guidance).
         if (result.fallbackReason === "printwindow-failed") {
           localWarnings.push(
@@ -1131,12 +1149,27 @@ export const screenshotBgHandler = async ({
       wantInline: true,
       meta: { tag: foundTitle || effectiveTitle },
     });
-    const allBgWarnings = warning ? [...bgWarnings, warning] : bgWarnings;
+    const allBgWarnings = warning ? [...bgWarnings, warning] : [...bgWarnings];
+    // ADR-027 R9/AC8 — captureBlocked means no capture rung produced non-black
+    // pixels for this background capture, so the returned image is a uniform
+    // black frame. Surface it explicitly instead of returning a silent black
+    // image. The wording describes only the OUTCOME (the returned image), NOT
+    // which rungs ran — on the documented PrintWindow-only paths (fullContent=
+    // false, client-only, hidden/minimized/cloaked, WGC unsupported) WGC is
+    // never attempted, so claiming "via WGC and PrintWindow" would be misleading
+    // (Codex review). It is also HEDGED — pixels can't tell a genuinely-black
+    // window from uncapturable content. Fixed string only (CWE-94).
+    const captureBlocked = result.captureBlocked === true;
+    if (captureBlocked) {
+      allBgWarnings.push(
+        "The background capture is a uniform all-black frame and could not be verified as real window content. The window may legitimately be black (a dark terminal, a black or letterboxed video frame, or a freshly-launched GPU app) OR its content may be uncapturable (DRM-protected video, a secure-desktop / UAC prompt, or a hardware-overlay surface) — treat the image as unverified."
+      );
+    }
     return {
       content: [
         ...blocks,
         { type: "text" as const, text: dimensionText },
-        ...(allBgWarnings.length > 0 ? [{ type: "text" as const, text: JSON.stringify({ hints: { warnings: allBgWarnings } }) }] : []),
+        ...(allBgWarnings.length > 0 ? [{ type: "text" as const, text: JSON.stringify({ hints: { ...(captureBlocked ? { captureBlocked: true } : {}), warnings: allBgWarnings } }) }] : []),
       ],
     };
   } catch (err) {
