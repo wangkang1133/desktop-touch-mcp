@@ -513,17 +513,23 @@ Usage: desktop-touch-mcp [options]
 Options:
   --http          Use Streamable HTTP transport (default: stdio)
   --port <port>   HTTP port (default: 23847, requires --http)
+  --host <host>   HTTP host (default: 0.0.0.0, requires --http)
+  --api-key <key> Require API key for HTTP access (env: MCP_API_KEY)
   -h, --help      Show this help message
 
-HTTP endpoint: http://127.0.0.1:<port>/mcp
-Health check:  http://127.0.0.1:<port>/health`);
+HTTP endpoint: http://0.0.0.0:<port>/mcp
+Health check:  http://0.0.0.0:<port>/health`);
   process.exit(0);
 }
 
 const useHttp = args.includes("--http");
 const portIndex = args.indexOf("--port");
 const httpPort = portIndex !== -1 && args[portIndex + 1] ? parseInt(args[portIndex + 1], 10) : 23847;
-const httpUrl = useHttp ? `http://127.0.0.1:${httpPort}/mcp` : undefined;
+const hostIndex = args.indexOf("--host");
+const httpHost = hostIndex !== -1 && args[hostIndex + 1] ? args[hostIndex + 1] : "0.0.0.0";
+const apiKeyIndex = args.indexOf("--api-key");
+const apiKey = apiKeyIndex !== -1 && args[apiKeyIndex + 1] ? args[apiKeyIndex + 1] : process.env.MCP_API_KEY ?? "";
+const httpUrl = useHttp ? `http://${httpHost}:${httpPort}/mcp` : undefined;
 
 // ─── Log auto-guard startup status ───────────────────────────────────────────
 logAutoGuardStartup();
@@ -553,28 +559,27 @@ if (useHttp) {
   // This is required by the MCP SDK — server.connect() can only be called once per
   // McpServer instance, so we must create fresh instances per request.
   const httpServer = createServer(async (req, res) => {
-    // DNS rebinding protection
-    const host = req.headers.host ?? "";
-    if (!host.startsWith("127.0.0.1:") && !host.startsWith("localhost:")
-        && host !== "127.0.0.1" && host !== "localhost") {
-      res.writeHead(403);
-      res.end("Forbidden");
-      return;
+    // API Key authentication
+    if (apiKey) {
+      const reqKey = req.headers["x-api-key"] as string | undefined
+        ?? (() => { const u = new URL(req.url ?? "/", `http://${req.headers.host}`); return u.searchParams.get("api_key") ?? u.searchParams.get("key"); })();
+      if (reqKey !== apiKey) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Unauthorized: invalid or missing API key", hint: "Pass via X-API-Key header or ?api_key= query param" }));
+        return;
+      }
     }
 
-    // CORS — only echo Origin for localhost requests. The DNS rebinding check
-    // above bounds Host to localhost; the Origin check here bounds the
-    // BROWSER side: a malicious cross-origin tab can still reach the server
-    // via the user's loopback, but without a matching Allow-Origin the
-    // browser will not expose the response to JS — preventing a tab on
-    // evil.com from exfiltrating the MCP surface.
+    // Allow any host when listening on 0.0.0.0 (no DNS rebinding restriction)
+
+    // CORS — echo Origin for any request when API key is set, or allow all for open access
     const origin = req.headers.origin;
-    if (typeof origin === "string" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    if (typeof origin === "string") {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Vary", "Origin");
     }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, mcp-session-id, MCP-Protocol-Version");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, mcp-session-id, MCP-Protocol-Version, X-API-Key");
     res.setHeader("Access-Control-Expose-Headers", "mcp-session-id");
 
     if (req.method === "OPTIONS") {
@@ -637,8 +642,13 @@ if (useHttp) {
   });
 
   httpServerRef = httpServer;
-  httpServer.listen(httpPort, "127.0.0.1", () => {
+  httpServer.listen(httpPort, httpHost, () => {
     console.error(`[desktop-touch] MCP server running (http) on ${httpUrl}`);
+    if (apiKey) {
+      console.error(`[desktop-touch] API key authentication: ENABLED`);
+    } else {
+      console.error(`[desktop-touch] API key authentication: DISABLED (set --api-key or MCP_API_KEY env to enable)`);
+    }
   });
 } else {
   const server = createMcpServer();

@@ -103,9 +103,29 @@ Clients that require an HTTP endpoint (GPT Desktop, VS Code Copilot, Cursor, etc
 npx -y @harusame64/desktop-touch-mcp --http
 # or with a custom port:
 npx -y @harusame64/desktop-touch-mcp --http --port 8080
+# or with a custom host (default: 0.0.0.0 for remote access):
+npx -y @harusame64/desktop-touch-mcp --http --host 0.0.0.0 --port 8080
 ```
 
-The server starts at `http://127.0.0.1:23847/mcp` (localhost only). Register the URL in your MCP client settings. A health check is available at `http://127.0.0.1:<port>/health`.
+The server starts at `http://0.0.0.0:23847/mcp` (accessible from all network interfaces by default). Register the URL in your MCP client settings. A health check is available at `http://0.0.0.0:<port>/health`.
+
+#### API Key Authentication
+
+When exposing the server to a network, it is **strongly recommended** to enable API key authentication to prevent unauthorized access:
+
+```bash
+# Via command-line flag:
+npx -y @harusame64/desktop-touch-mcp --http --api-key your-secret-key
+
+# Or via environment variable:
+MCP_API_KEY=your-secret-key npx -y @harusame64/desktop-touch-mcp --http
+```
+
+Clients must include the API key in requests via:
+- **HTTP header**: `X-API-Key: your-secret-key`
+- **Query parameter**: `?api_key=your-secret-key`
+
+Without the correct key, requests receive a `401 Unauthorized` response.
 
 In HTTP mode the system tray icon shows the active URL and provides quick-copy and open-in-browser shortcuts.
 
