@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Harusame64/desktop-touch-mcp",
-  "description": "Computer-use MCP for Windows 10/11: 31 tools — screenshot, UIA, Chrome CDP, type/click/scroll, VBA.",
+  "description": "Windows 10/11 专用 computer-use MCP 服务器：31 个工具 — 截图、UIA、Chrome CDP、键鼠输入、VBA 宏。",
   "repository": {
     "url": "https://github.com/Harusame64/desktop-touch-mcp",
     "source": "github"
@@ -17,43 +17,50 @@
       },
       "environmentVariables": [
         {
+          "name": "DESKTOP_TOUCH_API_KEY",
+          "description": "HTTP 模式认证 API 密钥。绑定到 0.0.0.0 时为必填项。客户端必须在请求头中包含 'Authorization: Bearer *** 密钥。",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
           "name": "DESKTOP_TOUCH_AUTO_GUARD",
-          "description": "Set to '0' to disable automatic action guards (reverts to v0.11.12 behavior).",
+          "description": "设置为 '0' 以禁用自动操作防护（恢复为 v0.11.12 行为）。",
           "isRequired": false,
           "format": "string",
           "isSecret": false
         },
         {
           "name": "DESKTOP_TOUCH_PERCEPTION_RESOURCES",
-          "description": "Set to '1' to enable MCP perception resources.",
+          "description": "设置为 '1' 以启用 MCP 感知资源。",
           "isRequired": false,
           "format": "string",
           "isSecret": false
         },
         {
           "name": "DESKTOP_TOUCH_PERCEPTION_IDLE_MS",
-          "description": "Idle ms before the WinEvent sidecar enters dormancy (default 60000).",
+          "description": "WinEvent 后台进程进入休眠前的空闲毫秒数（默认 60000）。",
           "isRequired": false,
           "format": "string",
           "isSecret": false
         },
         {
           "name": "DESKTOP_TOUCH_PERCEPTION_DORMANCY_DISABLE",
-          "description": "Set to '1' to keep the WinEvent sidecar always running (no auto-dormancy).",
+          "description": "设置为 '1' 以保持 WinEvent 后台进程始终运行（禁用自动休眠）。",
           "isRequired": false,
           "format": "string",
           "isSecret": false
         },
         {
           "name": "DESKTOP_TOUCH_DIAGNOSTIC_LOG_DISABLE",
-          "description": "Set to '1' to disable the JSONL diagnostic event log (issue #365 Phase 2).",
+          "description": "设置为 '1' 以禁用 JSONL 诊断事件日志（问题 #365 第二阶段）。",
           "isRequired": false,
           "format": "string",
           "isSecret": false
         },
         {
           "name": "DESKTOP_TOUCH_DIAGNOSTIC_LOG_PATH",
-          "description": "Override path for the diagnostic event log.",
+          "description": "覆盖诊断事件日志的存储路径。",
           "isRequired": false,
           "format": "string",
           "isSecret": false

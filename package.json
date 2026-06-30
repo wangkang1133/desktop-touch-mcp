@@ -33,12 +33,14 @@
     "node": ">=20.0.0"
   },
   "type": "module",
-  "main": "bin/launcher.js",
+  "main": "dist/index.js",
   "bin": {
     "desktop-touch-mcp": "bin/launcher.js"
   },
   "files": [
     "bin/launcher.js",
+    "install.js",
+    "start.bat",
     "LICENSE",
     "README.md",
     "README.ja.md"
@@ -101,7 +103,8 @@
     "build:rs:debug": "node scripts/build-rs.mjs --debug",
     "artifacts:rs": "napi artifacts",
     "bench:envelope-size": "node benches/l4_envelope_size.mjs",
-    "bench:wgc-latency": "node benches/wgc_latency.mjs"
+    "bench:wgc-latency": "node benches/wgc_latency.mjs",
+    "pack:zip": "node scripts/pack-zip.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -114,7 +117,7 @@
     "fast-check": "^4.8.0",
     "globals": "^17.7.0",
     "sharp": "^0.35.2",
-    "typescript": "^6.0.2",
+    "typescript": "^6.0.3",
     "typescript-eslint": "^8.62.0",
     "vitest": "^4.1.9",
     "ws": "^8.21.0",

@@ -1,82 +1,28 @@
 /**
- * User-configurable launch allowlist for workspace_launch.
+ * launch-config.ts — 启动配置。
  *
- * Location (first found wins):
- *   1. Path in env var DESKTOP_TOUCH_ALLOWLIST
- *   2. ~/.claude/desktop-touch-allowlist.json
- *   3. <server dir>/desktop-touch-allowlist.json
- *
- * Format:
- * {
- *   "allowedExecutables": [
- *     "myapp.exe",
- *     "C:\\Program Files\\MyTool\\tool.exe"
- *   ]
- * }
- *
- * Entries are matched against the command basename (case-insensitive)
- * OR the full normalized path. Allowlisted commands bypass the blocklist.
+ * 白名单/黑名单系统已被移除。所有可执行文件
+ * 现在均可在 workspace_launch 中启动。仅保留
+ * 紧急停止安全机制（鼠标移至左上角）。
  */
 
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
-
-interface AllowlistConfig {
-  allowedExecutables: string[];
+/**
+ * 始终返回 false——无可执行文件被阻止。
+ */
+export function isExecutableBlocked(_command: string): boolean {
+  return false;
 }
 
-let _cache: Set<string> | null = null;
-let _lastMtime = 0;
-
-function resolveConfigPath(): string | null {
-  const fromEnv = process.env["DESKTOP_TOUCH_ALLOWLIST"];
-  if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
-
-  const fromHome = path.join(os.homedir(), ".claude", "desktop-touch-allowlist.json");
-  if (fs.existsSync(fromHome)) return fromHome;
-
-  const fromDir = path.join(path.dirname(process.execPath), "desktop-touch-allowlist.json");
-  if (fs.existsSync(fromDir)) return fromDir;
-
-  return null;
+/**
+ * 始终返回 true——所有可执行文件均视为已允许。
+ */
+export function isExecutableAllowlisted(_command: string): boolean {
+  return true;
 }
 
-/** Load and cache the allowlist. Re-reads if the file has changed. */
+/**
+ * 空操作：返回空集合。不再读取白名单文件。
+ */
 export function getAllowedExecutables(): Set<string> {
-  const configPath = resolveConfigPath();
-  if (!configPath) return new Set();
-
-  try {
-    // Read first to avoid a stat/read TOCTOU race; then capture mtime *after*
-    // the read so a stale cache entry is the only possible race outcome
-    // (never a partially-read file).
-    const fd = fs.openSync(configPath, "r");
-    try {
-      const stat = fs.fstatSync(fd);
-      if (_cache && stat.mtimeMs === _lastMtime) return _cache;
-      const raw = fs.readFileSync(fd, "utf-8");
-      const parsed = JSON.parse(raw) as AllowlistConfig;
-      const entries = Array.isArray(parsed.allowedExecutables) ? parsed.allowedExecutables : [];
-      _cache = new Set(
-        entries.map((e) => path.basename(e).toLowerCase())
-          .concat(entries.map((e) => path.normalize(e).toLowerCase()))
-      );
-      _lastMtime = stat.mtimeMs;
-      return _cache;
-    } finally {
-      try { fs.closeSync(fd); } catch { /* best-effort */ }
-    }
-  } catch {
-    return _cache ?? new Set();
-  }
-}
-
-/** Return true if this command is explicitly allowlisted by the user config. */
-export function isExecutableAllowlisted(command: string): boolean {
-  const allowed = getAllowedExecutables();
-  if (allowed.size === 0) return false;
-  const basename = path.basename(command).toLowerCase();
-  const normalized = path.normalize(command).toLowerCase();
-  return allowed.has(basename) || allowed.has(normalized);
+  return new Set();
 }

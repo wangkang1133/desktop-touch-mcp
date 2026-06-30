@@ -92,8 +92,8 @@ export const workspaceSnapshotSchema = {
 };
 
 export const workspaceLaunchSchema = {
-  command: z.string().max(260).describe("Executable name or full path (e.g. 'notepad.exe', 'calc.exe'). Shell interpreters (cmd.exe, powershell.exe, etc.) are blocked."),
-  args: z.array(z.string().max(1000)).max(20).default([]).describe("Command-line arguments (max 20). Shell metacharacters (; & | ` $() ${}) are not allowed."),
+  command: z.string().max(260).describe("Executable name or full path (e.g. 'notepad.exe', 'calc.exe', 'cmd.exe', 'powershell')."),
+  args: z.array(z.string().max(1000)).max(20).default([]).describe("Command-line arguments (max 20)."),
   waitMs: z.coerce.number().int().min(0).max(30000).default(2000).describe("Milliseconds to wait for the window to appear (default 2000)"),
 };
 

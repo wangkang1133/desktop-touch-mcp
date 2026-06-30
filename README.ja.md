@@ -31,7 +31,7 @@ npx -y @harusame64/desktop-touch-mcp
 - **UIA アクション要素抽出** — `detail="text"` でボタン・入力欄の名前と `clickAt` 座標を JSON で返すため、画像を見なくても操作できる。
 - **Chromium スマートフォールバック** — Chrome/Edge/Brave に対して `detail="text"` を使うと、低速な UIA を自動スキップし Windows OCR を実行。`hints.chromiumGuard` + `hints.ocrFallbackFired` で経路を判別可能。
 - **CLI 自動ドック** — `window_dock(action='dock')` でウィンドウを画面隅にスナップ＆最前面固定。`DESKTOP_TOUCH_DOCK_TITLE='@parent'` を設定すると、MCP 起動時にプロセスツリーを辿って Claude CLI をホストするターミナルを自動ドック。
-- **緊急停止 (Failsafe)** — マウスを**画面左上コーナー (0,0 付近 10px)** に移動すると MCP サーバーが即座に終了。
+- **緊急停止 (Failsafe)** — マウスを**画面左上コーナー (0,0 付近 10px)** に移動すると MCP サーバーが即座に終了。これが唯一の安全機能であり、すべてのキーの組み合わせとアプリ起動は制限なし。
 
 ---
 
@@ -416,18 +416,7 @@ screenshot(diffMode=true)               → 変化した窓だけ確認（~160 t
 - **バックグラウンド監視**: 500ms 間隔で常時監視（長時間処理中のバックアップ）
 - コーナー判定範囲: 10px 以内
 
-### ブロックされる操作
-
-**`workspace_launch` のブロックリスト:**  
-`cmd.exe`, `powershell.exe`, `pwsh.exe`, `wscript.exe`, `cscript.exe`, `mshta.exe`, `regsvr32.exe`, `rundll32.exe`, `msiexec.exe`, `bash.exe`, `wsl.exe` は起動不可。  
-`.bat`, `.ps1`, `.vbs` 等のスクリプトファイルも拒否。引数に `;`, `&`, `|`, `` ` ``, `$(`, `${` を含む場合も拒否。
-
-**`keyboard(action='press')` のブロックリスト:**  
-`Win+R`（Run ダイアログ）、`Win+X`（管理ツールメニュー）、`Win+S`（検索）、`Win+L`（ロック）は実行不可。
-
-### PowerShell インジェクション対策
-
-UIA ブリッジの PowerShell フォールバックパスでは、`-like` パターンに `escapeLike()` でワイルドカード文字 (`*`, `?`, `[`, `]`) をエスケープ済み。v0.15 以降、UIA の主パスは Rust ネイティブエンジン（直接 COM 呼び出し）のため、PowerShell は補助的なフォールバックとしてのみ使用されます。
+_注：すべてのキーの組み合わせとアプリ起動は制限なし。以前のキーボードブロックリスト（Win+R/X/S/L）およびアプリブロックリストは削除され、緊急停止が唯一の安全機能です。_
 
 ---
 

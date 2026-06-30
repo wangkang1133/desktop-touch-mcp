@@ -508,22 +508,46 @@ if (args.includes("--help") || args.includes("-h")) {
   // eslint-disable-next-line no-console
   console.log(`desktop-touch-mcp v${SERVER_VERSION}
 
-Usage: desktop-touch-mcp [options]
+用法: desktop-touch-mcp [选项]
 
-Options:
-  --http          Use Streamable HTTP transport (default: stdio)
-  --port <port>   HTTP port (default: 23847, requires --http)
-  -h, --help      Show this help message
+选项:
+  --http          使用 Streamable HTTP 传输（默认: stdio）
+  --port <端口>   HTTP 端口（默认: 23847，需配合 --http）
+  --host <地址>   HTTP 绑定地址（默认: 0.0.0.0，需配合 --http）
+  --key <密钥>    HTTP 认证 API 密钥（或设置 DESKTOP_TOUCH_API_KEY 环境变量）
+  -h, --help      显示此帮助信息
 
-HTTP endpoint: http://127.0.0.1:<port>/mcp
-Health check:  http://127.0.0.1:<port>/health`);
+HTTP 端点: http://0.0.0.0:<端口>/mcp
+健康检查:  http://0.0.0.0:<端口>/health
+
+认证（HTTP 模式）:
+  绑定到 0.0.0.0 时 API 密钥为必填项。
+  通过 --key 参数或 DESKTOP_TOUCH_API_KEY 环境变量设置。
+  客户端请求头: "Bearer <密钥>" 或 "ApiKey <密钥>"。`);
   process.exit(0);
 }
 
 const useHttp = args.includes("--http");
 const portIndex = args.indexOf("--port");
+const hostIndex = args.indexOf("--host");
+const keyIndex = args.indexOf("--key");
 const httpPort = portIndex !== -1 && args[portIndex + 1] ? parseInt(args[portIndex + 1], 10) : 23847;
-const httpUrl = useHttp ? `http://127.0.0.1:${httpPort}/mcp` : undefined;
+const httpHost = hostIndex !== -1 && args[hostIndex + 1] ? args[hostIndex + 1] : "0.0.0.0";
+
+// API 密钥：CLI 参数优先，其次环境变量。
+// 绑定到非 localhost 时，密钥为必填项。
+const apiKey = (keyIndex !== -1 && args[keyIndex + 1]) ? args[keyIndex + 1]
+  : process.env.DESKTOP_TOUCH_API_KEY ?? null;
+
+if (useHttp && httpHost !== "127.0.0.1" && httpHost !== "localhost" && !apiKey) {
+  console.error(
+    `[desktop-touch] 严重: 绑定到 ${httpHost} 需要 API 密钥以确保安全。\n` +
+    `请设置 DESKTOP_TOUCH_API_KEY 环境变量或使用 --key <密钥> 参数。`
+  );
+  process.exit(1);
+}
+
+const httpUrl = useHttp ? `http://${httpHost}:${httpPort}/mcp` : undefined;
 
 // ─── Log auto-guard startup status ───────────────────────────────────────────
 logAutoGuardStartup();
@@ -553,28 +577,35 @@ if (useHttp) {
   // This is required by the MCP SDK — server.connect() can only be called once per
   // McpServer instance, so we must create fresh instances per request.
   const httpServer = createServer(async (req, res) => {
-    // DNS rebinding protection
-    const host = req.headers.host ?? "";
-    if (!host.startsWith("127.0.0.1:") && !host.startsWith("localhost:")
-        && host !== "127.0.0.1" && host !== "localhost") {
-      res.writeHead(403);
-      res.end("Forbidden");
-      return;
+    // ── API Key authentication ────────────────────────────────────────────
+    if (apiKey) {
+      const auth = req.headers.authorization ?? "";
+      let providedKey = "";
+      if (auth.startsWith("Bearer ")) {
+        providedKey = auth.slice(7).trim();
+      } else if (auth.startsWith("ApiKey ")) {
+        providedKey = auth.slice(7).trim();
+      }
+      if (providedKey !== apiKey) {
+        res.writeHead(401, {
+          "Content-Type": "application/json",
+          "WWW-Authenticate": 'Bearer realm="desktop-touch-mcp"',
+        });
+        res.end(JSON.stringify({ error: "未授权", message: "API 密钥无效或缺失" }));
+        return;
+      }
     }
 
-    // CORS — only echo Origin for localhost requests. The DNS rebinding check
-    // above bounds Host to localhost; the Origin check here bounds the
-    // BROWSER side: a malicious cross-origin tab can still reach the server
-    // via the user's loopback, but without a matching Allow-Origin the
-    // browser will not expose the response to JS — preventing a tab on
-    // evil.com from exfiltrating the MCP surface.
+    // ── CORS — open for all origins (0.0.0.0 mode) ────────────────────────
     const origin = req.headers.origin;
-    if (typeof origin === "string" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    if (typeof origin === "string") {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Vary", "Origin");
+    } else {
+      res.setHeader("Access-Control-Allow-Origin", "*");
     }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, mcp-session-id, MCP-Protocol-Version");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id, MCP-Protocol-Version");
     res.setHeader("Access-Control-Expose-Headers", "mcp-session-id");
 
     if (req.method === "OPTIONS") {
@@ -584,30 +615,9 @@ if (useHttp) {
     }
 
     if (req.url?.startsWith("/mcp")) {
-      // Review R1 P2-1: HTTP path also needs to update lastRpc + wake the
-      // perception runtime, otherwise dormancy will keep the sidecar asleep
-      // forever for HTTP clients (lastRpc never advances). Stamp the activity
-      // before handleRequest dispatches to the MCP server. Method is unknown
-      // at this layer (handleRequest parses the body), so we use a generic
-      // label.
       recordRpcReceived("http");
       wakePerceptionRuntime();
       const reqServer = createMcpServer();
-      // Stateless mode (`sessionIdGenerator: undefined`):
-      // per-request McpServer 構造 (上の comment 参照) と SDK の stateful 設計
-      // (sessionIdGenerator が UUID 発行する mode) は両立不能 — stateful mode は
-      // persistent McpServer を要求するが、本 server は request ごとに
-      // createMcpServer/connect する per-request 構造。
-      //
-      // ADR-011 A-2 land (PR #158) で session_id source を `extra.sessionId` から
-      // ALS 経由で取得する wrapper wire は完成済、ただし本 production HTTP 経路は
-      // 現状 dormant (全 client が共有 "default" session に fallback、
-      // benchmark `benches/a2_http_multisession_isolation.mjs` で実証)。
-      //
-      // 真の per-session causal isolation を有効化するには (a) HTTP server を
-      // persistent McpServer + session middleware に再設計、または (b) MCP SDK
-      // の stateless + session_id 同居 mode を待つ — どちらも別 ADR / 別 PR で扱う。
-      // 本 server は backward compat 維持で stateless 固定。
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
@@ -637,8 +647,9 @@ if (useHttp) {
   });
 
   httpServerRef = httpServer;
-  httpServer.listen(httpPort, "127.0.0.1", () => {
-    console.error(`[desktop-touch] MCP server running (http) on ${httpUrl}`);
+  httpServer.listen(httpPort, httpHost, () => {
+    const keyStatus = apiKey ? "key=on" : "key=off";
+    console.error(`[desktop-touch] MCP server running (http) on ${httpUrl} ${keyStatus}`);
   });
 } else {
   const server = createMcpServer();

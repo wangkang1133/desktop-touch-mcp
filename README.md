@@ -4,82 +4,104 @@
 
 [日本語](README.ja.md)
 
-> **Computer-use MCP server for Windows.** Lets Claude, Cursor, or any MCP client see and operate your Windows 10/11 desktop — screenshots, UI Automation, Chrome CDP, keyboard / mouse, terminal — with **semantic discover-then-act targeting** that avoids pixel-coordinate guessing, and **per-action perception guards** that catch wrong-window typing before it happens.
+> **Windows 10/11 专用 Computer-use MCP 服务器。** 让 Claude、Cursor 或任何 MCP 客户端查看并操作你的 Windows 桌面——截图、UI Automation、Chrome CDP、键盘/鼠标、终端——采用**语义化"发现-操作"设计**避免像素坐标猜测，配备**每次操作的感知防护**在误输入到错误窗口前及时拦截。
 
 ```bash
 npx -y @harusame64/desktop-touch-mcp
 ```
 
-31 tools, native Rust engine (UIA in 2 ms), zero-config PowerShell fallback, full CJK support, MIT licensed. Add the snippet above to your Claude / Cursor / VS Code Copilot config and Claude can drive Notepad, Excel, Chrome, Windows Terminal, and any other app on your machine.
+31 个工具，原生 Rust 引擎（UIA 2ms），零配置 PowerShell 回退，完整 CJK 支持，MIT 许可证。支持 **stdio**（直接 CLI 集成）和 **HTTP**（远程/局域网访问 + API 密钥认证）两种模式。
 
-> **Why this over pixel-clicking?** Two ideas run through every tool: **discover-then-act** — `desktop_discover` returns interactive entities with short-lived leases instead of raw coordinates, so `desktop_act` operates on *what* you mean, not *where* it was — and **per-action perception guards** that verify the target window's identity and bounds before input lands, catching wrong-window typing and stale-coordinate clicks before they happen.
+> **快速安装（无需 npm/npx）：**
+> 1. 从 [GitHub Releases](https://github.com/Harusame64/desktop-touch-mcp/releases) 下载 `desktop-touch-mcp-windows.zip`
+> 2. 解压到任意文件夹
+> 3. 运行：`node dist/index.js`（stdio）或 `node dist/index.js --http --port 23847 --key YOUR_KEY`（HTTP）
+> 4. Windows 用户：直接双击 `start.bat`
+
+> **为什么比像素点击更好？** 两个核心理念贯穿每个工具：**发现-操作** —— `desktop_discover` 返回带短期租约的可交互实体而非原始坐标，因此 `desktop_act` 操作的是你**意图的目标**，而非它**曾经的位置**；**每次操作的感知防护**在输入到达前验证目标窗口的身份和边界，防止误窗口输入和失效坐标点击。
 >
-> Under the hood: an **82× average speedup** from the Rust native engine (UIA focus queries in 2 ms, SSE2-accelerated image diffing at 13–15×), with a transparent PowerShell fallback when the engine is absent. The npm launcher fetches only the GitHub Release tag matching the installed version and verifies the Windows runtime zip before extraction.
+> 底层实现：Rust 原生引擎带来**82 倍平均加速**（UIA 焦点查询 2ms，SSE2 加速图像差分 13~15 倍），引擎不可用时透明回退到 PowerShell。npm 启动器仅获取匹配安装版本的 GitHub Release 标签，并在解压前验证 Windows 运行时 zip 的完整性。
 
 ---
 
-## Features
+## 功能特性
 
-- **⚡ High-performance Rust Native Core** — The UIA bridge and image-diff engine are written in Rust (`napi-rs` + `windows-rs`) and loaded as a native `.node` addon. Direct COM calls from a dedicated MTA thread eliminate PowerShell process spawning — `getFocusedElement` completes in **2 ms** (160× faster), and `getUiElements` returns full trees in **~100 ms** with a batch BFS algorithm that minimizes cross-process RPC. Image-diff operations use **SSE2 SIMD** for 13–15× throughput. When the native engine is unavailable, every function transparently falls back to PowerShell — zero config required.
-- **🎯 Set-of-Marks (SoM) visual fallback** — Games, RDP sessions, and non-accessible Electron apps return clickable elements even when UIA is completely blind. `screenshot(detail="text")` automatically detects UIA sparsity and activates a Hybrid Non-CDP pipeline: Rust-powered grayscale + bilinear upscale → Windows OCR → clustering → red bounding-box annotation with numbered badges (`[1]`, `[2]`…). Two parallel representations returned: a visual PNG for spatial orientation and a semantic `elements[]` list with `clickAt` coords — no CDP required.
-- **🔁 One-call confirmation on visual-only targets** — On UIA-blind targets (Electron, PWAs, games, custom canvases, RDP windows), `desktop_act` can fold the post-action confirmation into its own response: an optional `roiCapture` carrying a PNG crop of *just the region that changed* plus a lease-less preview of the controls now visible there. The agent confirms what its click did and finds the next target without a separate `desktop_state` + `screenshot`. On visual-only targets it is **on by default** for a visible change (`returnCapture:"on-change"`); pass `returnCapture:"never"` to suppress it, or `"always"` to force it. Never attached on structured targets (browser/CDP, UIA-rich native), where `desktop_state` is cheaper and exact — so those responses are unchanged.
-- **LLM-native design** — Built around how LLMs think, not how humans click. `run_macro` batches multiple operations into a single API call; `diffMode` sends only the windows that changed since the last frame. Minimal tokens, minimal round-trips.
-- **Reactive Perception Graph** — Register a `lensId` for a window or browser tab, pass it to action tools, and get guard-checked `post.perception` feedback after each action. It reduces repeated `screenshot` / `desktop_state` calls and prevents wrong-window typing or stale-coordinate clicks.
-- **Full CJK support** — Uses Win32 `GetWindowTextW` for window titles, avoiding nut-js garbling. IME bypass input supported for Japanese/Chinese/Korean environments.
-- **3-tier token reduction** — `detail="image"` (~443 tok) / `detail="text"` (~100–300 tok) / `diffMode=true` (~160 tok). Send pixels only when you actually need to see them.
-- **1:1 coordinate mode** — `dotByDot=true` captures at native resolution (WebP). Image pixel = screen coordinate — no scale math needed. With `origin`+`scale` passed to `mouse_click`, the server converts coords for you — eliminating off-by-one / scale bugs.
-- **Browser capture data reduction** — `grayscale=true` (~50% size), `dotByDotMaxDimension=1280` (auto-scaled with coord preservation), and `windowTitle + region` sub-crops help exclude browser chrome and other irrelevant pixels. Typical reduction for heavy captures: 50–70%.
-- **Chromium smart fallback** — `detail="text"` on Chrome/Edge/Brave auto-skips UIA (prohibitively slow there) and runs Windows OCR. `hints.chromiumGuard` + `hints.ocrFallbackFired` flag the path taken.
-- **UIA element extraction** — `detail="text"` returns button names and `clickAt` coords as JSON. Claude can click the right element without ever looking at a screenshot.
-- **Auto-dock CLI** — `window_dock(action='dock')` snaps any window to a screen corner with always-on-top. Set `DESKTOP_TOUCH_DOCK_TITLE='@parent'` to auto-dock the terminal hosting Claude on MCP startup — the process-tree walker finds the right window regardless of title.
-- **Emergency stop (Failsafe)** — Move the mouse to the **top-left corner (within 10px of 0,0)** to immediately terminate the MCP server.
-
----
-
-## Requirements
-
-| | |
-|---|---|
-| OS | Windows 10 / 11 (64-bit) |
-| Node.js | v20+ recommended (tested on v22+) |
-| PowerShell | 5.1+ (bundled with Windows) — used only as fallback when the Rust native engine is unavailable |
-| Claude CLI | `claude` command must be available |
-
-> **Note:** nut-js native bindings require the Visual C++ Redistributable.
-> Download from [Microsoft](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) if not already installed.
+- **⚡ 高性能 Rust 原生核心** — UIA 桥接和图像差分引擎用 Rust (`napi-rs` + `windows-rs`) 编写，以 `.node` 插件加载。专用 MTA 线程直接 COM 调用消除了 PowerShell 进程启动——`getFocusedElement` **2ms** 完成（160 倍加速），`getUiElements` 用批量 BFS 算法最小化跨进程 RPC，约 **100ms** 返回完整树。图像差分使用 **SSE2 SIMD** 实现 13~15 倍吞吐。原生引擎不可用时，所有函数透明回退到 PowerShell——零配置。
+- **🎯 Set-of-Marks (SoM) 视觉回退** — 游戏、RDP 会话和不可访问的 Electron 应用即使 UIA 完全失效也能返回可点击元素。`screenshot(detail="text")` 自动检测 UIA 稀疏性并激活混合非 CDP 管道：Rust 灰度 + 双线性放大 → Windows OCR → 聚类 → 红色边框标注带编号标记（`[1]`、`[2]`…）。同时返回可视化 PNG 用于空间定位和带 `clickAt` 坐标的语义 `elements[]` 列表——无需 CDP。
+- **🔁 视觉目标一次确认** — 在 UIA 失效的目标上（Electron、PWA、游戏、自定义画布、RDP 窗口），`desktop_act` 可将操作后确认合并到自身响应中：可选的 `roiCapture` 携带**仅变化区域**的 PNG 裁剪加无租约的下一目标预览。Agent 一次调用即可确认点击效果并发现下一个目标，无需额外的 `desktop_state` + `screenshot`。视觉目标默认开启（`returnCapture:"on-change"`）；设 `"never"` 关闭，`"always"` 强制。结构化目标（浏览器/CDP、UIA 丰富的原生应用）不会附加——此时 `desktop_state` 更便宜精确。
+- **LLM 原生设计** — 围绕 LLM 的思维方式而非人类的点击习惯设计。`run_macro` 将多个操作合入一次 API 调用；`diffMode` 仅发送自上次帧以来变化的窗口。最少 token，最少往返。
+- **响应式感知图** — 为窗口或浏览器标签注册 `lensId`，传递给操作工具即可获得每次操作后的 `post.perception` 反馈。减少重复 `screenshot` / `desktop_state` 调用，防止误窗口输入和失效坐标点击。
+- **完整 CJK 支持** — 使用 Win32 `GetWindowTextW` 获取窗口标题，避免 nut-js 乱码。支持 IME 旁路输入，适配日文/中文/韩文环境。
+- **3 级 Token 削减** — `detail="image"`（~443 tok）/ `detail="text"`（~100~300 tok）/ `diffMode=true`（~160 tok）。只在真正需要看到像素时才发送图像。
+- **1:1 坐标模式** — `dotByDot=true` 以原生分辨率捕获（WebP）。图像像素 = 屏幕坐标——无需缩放运算。配合 `mouse_click` 传入 `origin`+`scale`，服务器自动换算坐标——消除偏移和缩放错误。
+- **浏览器捕获数据缩减** — `grayscale=true`（~50% 大小）、`dotByDotMaxDimension=1280`（自动缩放并保留坐标）以及 `windowTitle + region` 局部裁剪，帮助排除浏览器 UI 等无关像素。重度捕获典型缩减 50~70%。
+- **Chromium 智能回退** — Chrome/Edge/Brave 上 `detail="text"` 自动跳过 UIA（太慢）并运行 Windows OCR。`hints.chromiumGuard` + `hints.ocrFallbackFired` 标记所走路径。
+- **UIA 元素提取** — `detail="text"` 返回按钮名称和 `clickAt` 坐标的 JSON。Claude 无需查看截图即可点击正确元素。
+- **自动停靠 CLI** — `window_dock(action='dock')` 将窗口吸附到屏幕角落并置顶。设置 `DESKTOP_TOUCH_DOCK_TITLE='@parent'` 可在 MCP 启动时自动停靠承载 Claude 的终端——进程树追踪器会找到正确的窗口。
+- **紧急停止（Failsafe）** — 将鼠标移至**屏幕左上角（0,0 附近 10px 以内）**即可立即终止 MCP 服务器。这是**唯一**的安全防护——所有按键组合和应用启动不受限制。
 
 ---
 
-## Installation
+## 环境要求
+
+|| | |
+||---|---|
+|| 操作系统 | Windows 10 / 11（64 位） |
+|| Node.js | v20+ 推荐（v22+ 已测试） |
+|| PowerShell | 5.1+（Windows 捆绑）——仅作为 Rust 原生引擎不可用时的回退 |
+|| Claude CLI | 需要可用的 `claude` 命令 |
+
+> **注意：** nut-js 原生绑定需要 Visual C++ 运行时。如未安装，请从 [Microsoft](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) 下载。
+
+---
+
+## 安装
+
+### 方式 A：下载预编译 zip 包（推荐）
+
+无需 npm、npx 或构建工具。
+
+1. 从 [GitHub Releases](https://github.com/Harusame64/desktop-touch-mcp/releases) 下载 `desktop-touch-mcp-windows.zip`
+2. 解压到任意文件夹（例如 `C:\Tools\desktop-touch-mcp`）
+3. 运行：
+   - **stdio 模式**（用于 Claude Code、Cursor 等）：`node dist/index.js`
+   - **HTTP 模式**（用于局域网/远程访问）：`node dist/index.js --http --port 23847 --key YOUR_KEY`
+   - **Windows 双击**：直接运行 `start.bat`
+
+或使用独立安装脚本：
+```bash
+node install.js --dir C:\Tools\desktop-touch-mcp
+```
+
+### 方式 B：npx（原始方式）
 
 ```bash
 npx -y @harusame64/desktop-touch-mcp
 ```
 
-The npm launcher resolves runtime strictly by npm package version. For package `X.Y.Z`, it fetches only GitHub Release tag `vX.Y.Z`, downloads `desktop-touch-mcp-windows.zip`, verifies its SHA256 digest, and only then expands it under `%USERPROFILE%\.desktop-touch-mcp`. Verified cached releases are reused on later runs.
+npm 启动器严格按包版本获取运行时。对于包版本 `X.Y.Z`，仅获取 GitHub Release 标签 `vX.Y.Z`，下载 `desktop-touch-mcp-windows.zip`，验证其 SHA256 摘要后才解压到 `%USERPROFILE%\.desktop-touch-mcp`。已验证的缓存版本在后续运行中复用。
 
-Set `DESKTOP_TOUCH_MCP_HOME` to override the cache root directory.
+设置 `DESKTOP_TOUCH_MCP_HOME` 可覆盖缓存根目录。
 
-> **On a shared or CI network?** The first run reads the GitHub Releases API to
-> locate the runtime zip. The anonymous limit is 60 requests/hour per IP, which a
-> shared public address (CI runners, office NAT) can exhaust before your download
-> even starts. Set `GITHUB_TOKEN` (or `GH_TOKEN`) in the environment and the
-> launcher authenticates the request, raising the limit to 5,000 requests/hour.
-> No token is needed on an ordinary home connection.
+### 注册到 Claude CLI
 
-> **Running the launcher from a source checkout?** A source build's
-> `bin/launcher.js` carries a placeholder integrity hash (`sha256: "PENDING"`)
-> instead of a finalized one. Rather than download and run an unverified runtime,
-> the launcher fails closed — this guard stops an accidentally published or
-> unfinalized launcher from silently starting unverified code. Published npm
-> releases always ship a real SHA256, so end users never see this. If you are
-> intentionally running the launcher from source, set
-> `DESKTOP_TOUCH_MCP_ALLOW_UNVERIFIED=1` to skip integrity verification
-> (development only).
+**使用 zip 安装（方式 A）：**
 
-### Register with Claude CLI
+添加到 `~/.claude.json` 的 `mcpServers` 下：
 
-Add to `~/.claude.json` under `mcpServers`:
+```json
+{
+  "mcpServers": {
+    "desktop-touch": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["C:/Tools/desktop-touch-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+**使用 npx（方式 B）：**
 
 ```json
 {
@@ -93,23 +115,32 @@ Add to `~/.claude.json` under `mcpServers`:
 }
 ```
 
-**No system prompt needed.** The command reference is automatically injected into Claude via the MCP `initialize` response's `instructions` field.
+**无需系统提示。** 命令参考会通过 MCP `initialize` 响应的 `instructions` 字段自动注入给 Claude。
 
-### Register with other clients (HTTP mode)
+### 注册到其他客户端（HTTP 模式）
 
-Clients that require an HTTP endpoint (GPT Desktop, VS Code Copilot, Cursor, etc.) can use the built-in Streamable HTTP transport:
+需要 HTTP 端点的客户端（GPT Desktop、VS Code Copilot、Hermes 等）可使用内置的 Streamable HTTP 传输：
 
 ```bash
-npx -y @harusame64/desktop-touch-mcp --http
-# or with a custom port:
-npx -y @harusame64/desktop-touch-mcp --http --port 8080
+# stdio 模式本地运行（默认）：
+node dist/index.js
+
+# HTTP 模式 — 仅限本机（无需密钥）：
+node dist/index.js --http --port 23847 --host 127.0.0.1
+
+# HTTP 模式 — 局域网/远程访问（API 密钥必填）：
+node dist/index.js --http --port 23847 --host 0.0.0.0 --key YOUR_KEY
+
+# 或通过环境变量设置密钥：
+set DESKTOP_TOUCH_API_KEY=YOUR_KEY
+node dist/index.js --http --port 23847 --host 0.0.0.0
 ```
 
-The server starts at `http://127.0.0.1:23847/mcp` (localhost only). Register the URL in your MCP client settings. A health check is available at `http://127.0.0.1:<port>/health`.
+服务器默认绑定到 `0.0.0.0`（可从任何网络接口访问）。绑定到非 localhost 地址时，API 密钥是**必填**的安全要求。客户端必须在每个请求中包含 `Authorization: Bearer *** 请求头。健康检查端点：`http://<地址>:<端口>/health`。
 
-In HTTP mode the system tray icon shows the active URL and provides quick-copy and open-in-browser shortcuts.
+HTTP 模式下系统托盘图标显示活动 URL，并提供快速复制和在浏览器中打开的快捷方式。
 
-### Development install
+### 开发安装
 
 ```bash
 git clone https://github.com/Harusame64/desktop-touch-mcp.git
@@ -117,13 +148,13 @@ cd desktop-touch-mcp
 npm install
 ```
 
-Build after install:
+安装后构建：
 
 ```bash
 npm run build
 ```
 
-For a local checkout, register the built server directly:
+本地检出时，直接注册构建好的服务器：
 
 ```json
 {
@@ -137,128 +168,111 @@ For a local checkout, register the built server directly:
 }
 ```
 
-> **Note:** Replace `D:/path/to/desktop-touch-mcp` with the actual path where you cloned this repository.
+> **注意：** 请将 `D:/path/to/desktop-touch-mcp` 替换为实际克隆路径。
 
 ---
 
-## Tools (31 Optimized Tools)
+## 工具列表（31 个优化工具）
 
-> 📖 **Full Reference**: [`docs/system-overview.md`](docs/system-overview.md) — Exhaustive guide on parameters, return schemas, and coordinate math.
+> 📖 **完整参考**：[`docs/system-overview.md`](docs/system-overview.md) — 参数、返回模式、坐标计算的详尽指南。
 
-### 🌐 World-Graph V2 (Primary Path)
-| Tool | Description |
-|---|---|
-| `desktop_discover` | Observe the desktop. Returns interactive entities with leases (UIA, CDP, Terminal, Visual SoM). |
-| `desktop_act` | Perform actions (click, type, drag, select) on entities via lease validation. Returns semantic diffs — plus an optional `roiCapture` (changed-region PNG + next-target preview) on visual-only targets. |
+### 🌐 World-Graph V2（主路径）
+|| 工具 | 说明 |
+||---|---|
+|| `desktop_discover` | 观察桌面。返回带租约的可交互实体（UIA、CDP、终端、视觉 SoM）。 |
+|| `desktop_act` | 通过租约验证对实体执行操作（点击、输入、拖拽、选择）。返回语义差异——视觉目标可选 `roiCapture`（变化区域 PNG 裁剪 + 下一目标预览）。 |
 
-### 👁️ Observation & State
-| Tool | Description |
-|---|---|
-| `desktop_state` | Lightweight check of focus, active window, cursor, and Auto-Perception attention signal. |
-| `screenshot` | Multi-mode capture: `detail='text'` (UIA/OCR), `diffMode` (P-frame), `dotByDot` (1:1), and `background`. Returns a cheap `screenshot://by-ref/{id}` link to the saved image instead of inlining pixels every time. |
-| `screenshot_query` / `screenshot_gc` | Inspect and prune the on-disk screenshot cache behind the by-ref links: `screenshot_query` lists saved captures without re-reading pixels; `screenshot_gc` reclaims space by retention policy (dry-run by default). |
-| `workspace_snapshot` | Instant session orientation: all window thumbnails + UI summaries in one call. |
-| `server_status` | Diagnostic check for native engine health and feature activation. |
+### 👁️ 观察与状态
+|| 工具 | 说明 |
+||---|---|
+|| `desktop_state` | 轻量检查焦点、活动窗口、光标和自动感知注意信号。 |
+|| `screenshot` | 多模式捕获：`detail='text'`（UIA/OCR）、`diffMode`（P帧）、`dotByDot`（1:1）、`background`。返回廉价的 `screenshot://by-ref/{id}` 链接而非每次内联像素。 |
+|| `screenshot_query` / `screenshot_gc` | 检查和清理磁盘截图缓存：`screenshot_query` 列出已保存的捕获；`screenshot_gc` 按保留策略回收空间（默认 dry-run）。 |
+|| `workspace_snapshot` | 即时会话概览：所有窗口缩略图 + UI 摘要，一次调用。 |
+|| `server_status` | 诊断检查原生引擎健康和功能激活状态。 |
 
-### ⌨️ Input & Control
-| Tool | Description |
-|---|---|
-| `keyboard` | Send keyboard input. Supports background input (WM_CHAR) and IME-safe clipboard bypass. |
-| `mouse_click` / `mouse_drag` | Precision coordinate-based interaction with homing and force-focus protection. |
-| `scroll` | Multi-strategy: `raw` (notches), `to_element`, `smart` (virtual lists), and `capture` (stitch). |
-| `click_element` | Legacy UIA-based click by name/ID (fallback when entities are unavailable). |
+### ⌨️ 输入与控制
+|| 工具 | 说明 |
+||---|---|
+|| `keyboard` | 发送键盘输入。支持后台输入（WM_CHAR）和 IME 安全剪贴板旁路。 |
+|| `mouse_click` / `mouse_drag` | 精确坐标交互，支持归位和强制焦点保护。 |
+|| `scroll` | 多策略：`raw`（滚轮）、`to_element`、`smart`（虚拟列表）和 `capture`（拼接）。 |
+|| `click_element` | 旧版 UIA 按名称/ID 点击（实体不可用时的回退）。 |
 
-### 🌐 Browser CDP (Chrome/Edge/Brave)
-| Tool | Description |
-|---|---|
-| `browser_open` / `browser_navigate` | Idempotent debug-mode launch and reliable navigation. |
-| `browser_click` / `browser_fill` / `browser_form` | High-level DOM interaction stable across repaints and framework re-renders. |
-| `browser_eval` | Deep inspection via `js` (scripting), `dom` (HTML), and `appState` (SPA data extraction). |
-| `browser_overview` / `browser_search` / `browser_locate` | Semantic discovery, grep-like DOM search, and pixel-accurate coordinate lookup. |
+### 🌐 浏览器 CDP（Chrome/Edge/Brave）
+|| 工具 | 说明 |
+||---|---|
+|| `browser_open` / `browser_navigate` | 幂等调试模式启动和可靠导航。 |
+|| `browser_click` / `browser_fill` / `browser_form` | 跨重绘和框架重新渲染稳定的高级 DOM 交互。 |
+|| `browser_eval` | 深度检查：`js`（脚本）、`dom`（HTML）、`appState`（SPA 数据提取）。 |
 
-### 🛠️ Utilities & Workflow
-| Tool | Description |
-|---|---|
-| `terminal` | Unified command execution: `run` (send + wait + read), `read` (OCR/UIA), and `send`. `run` completion modes: `quiet`, `pattern`, and `exit` (waits for the command to finish + returns its exit code — see [Terminal command completion](#terminal-command-completion-until)). |
-| `wait_until` | Efficient server-side polling for window, focus, text, or URL state changes. |
-| `window_dock` / `focus_window` | Window management: `pin` (always-on-top), `unpin`, `dock` (corner snap), and `focus`. |
-| `workspace_launch` | Launch apps and auto-detect new HWNDs (supports localized titles). |
-| `run_macro` | Batch up to 50 operations into a single round-trip for maximum efficiency. |
-| `clipboard` / `notification_show` | System-level text exchange and user alerts. |
+### 🛠️ 工具与工作流
+|| 工具 | 说明 |
+||---|---|
+|| `terminal` | 统一命令执行：`run`（发送+等待+读取）、`read`（OCR/UIA）和 `send`。`run` 完成模式：`quiet`、`pattern` 和 `exit`（等待命令完成 + 返回退出码）。 |
+|| `wait_until` | 高效服务端轮询窗口、焦点、文本或 URL 状态变化。 |
+|| `window_dock` / `focus_window` | 窗口管理：`pin`（置顶）、`unpin`、`dock`（角落吸附）和 `focus`。 |
+|| `workspace_launch` | 启动应用并自动检测新窗口句柄（支持本地化标题）。 |
+|| `run_macro` | 最多 50 个操作批量执行，最大化效率。 |
+|| `clipboard` / `notification_show` | 系统级文本交换和用户通知。 |
 
-### 📊 Office (Excel)
-| Tool | Description |
-|---|---|
-| `excel` | Author and run Excel VBA macros via COM. `action='run_vba'` writes a macro into a managed Trusted Location and runs it; `action='check_access_vbom'` is a read-only preflight. Runs VBA where formula-only tools cannot. One-time setup: `node scripts/enable-access-vbom.mjs`. |
-
----
-
-## Standard workflow (v1.0.0)
-
-The v2 World-Graph surface (`desktop_discover` / `desktop_act`) is the recommended dispatch path. The four-call shape works for native apps, browsers, and terminals identically.
-
-```
-desktop_state          → orient: focused window/element, modal, attention signal
-desktop_discover       → find actionable entities (returns lease + windows[])
-desktop_act(lease, …)  → act on entity (returns attention + post.perception)
-desktop_state          → confirm the world changed as expected
-```
-
-Clicking — priority order:
-
-```
-browser_click(selector)               → Chrome / Edge (CDP, stable across repaints)
-desktop_act(lease, action='click')    → native / dialog / visual (entity-based; use after desktop_discover)
-click_element(name | automationId)    → native UIA fallback if desktop_act returns ok:false
-mouse_click(x, y, origin?, scale?)    → pixel last resort; origin+scale from dotByDot screenshots only
-```
-
-Recovery hints — read `response.attention` after every observation and `response.warnings[]` on `desktop_discover` / `desktop_act`. Common reasons:
-
-- `lease_expired` / `lease_generation_mismatch` / `lease_digest_mismatch` / `entity_not_found` → re-call `desktop_discover`
-- `modal_blocking` → `response.blockingElement` (when present) names the blocking modal; dismiss via `click_element(name=blockingElement.name)` then retry
-- `entity_outside_viewport` → `scroll(action='to_element' | 'raw')`, then re-call `desktop_discover`
-- `executor_failed` → fall back to `click_element` / `mouse_click` / `browser_click`
-
-Lease lifecycle:
-
-- Each `desktop_discover` response carries `softExpiresAtMs` (≈ 60 % of the TTL window). Past that timestamp the LLM should consider re-calling `desktop_discover` even though the lease is still technically valid — `lease.expiresAtMs` is the only correctness wall.
-- TTL adapts to `view` mode (`action`/`explore`/`debug`), entity count, and response payload size. Cap is 60 s.
-- Set `DESKTOP_TOUCH_DISABLE_FUKUWARAI_V2=1` to fall back to the v1 tool surface (`get_windows` / `get_ui_elements` / `set_element_value`) for troubleshooting only — V2 is the recommended default.
+### 📊 Office（Excel）
+|| 工具 | 说明 |
+||---|---|
+|| `excel` | 通过 COM 编写和运行 Excel VBA 宏。`action='run_vba'` 将宏写入受信任位置并运行；`action='check_access_vbom'` 为只读预检。一次性设置：`node scripts/enable-access-vbom.mjs`。 |
 
 ---
 
-## Terminal command completion (`until`)
+## 标准工作流（v1.0.0）
 
-`terminal(action='run')` sends a command, waits for it to complete, and reads the
-output in one call. How it decides "complete" is controlled by `until`:
+v2 World-Graph（`desktop_discover` / `desktop_act`）是推荐的调度路径。四步调用适用于原生应用、浏览器和终端。
 
-| Mode | Waits for | Best for |
-|---|---|---|
-| `quiet` (default) | output to fall silent for `quietMs` | short interactive commands |
-| `pattern` | a string/regex you expect in the output | long commands with a known final marker |
-| `exit` | the command to actually **finish** | when you need completion or the exit code |
+```
+desktop_state          → 定向：焦点窗口/元素、模态、注意信号
+desktop_discover       → 查找可操作实体（返回 lease + windows[]）
+desktop_act(lease, …)  → 对实体操作（返回 attention + post.perception）
+desktop_state          → 确认世界按预期变化
+```
 
-> **Anchoring caveat (#384):** a command whose final line has no trailing newline
-> glues the marker to the next prompt with no line boundary (`printf X` →
-> `Xuser@host:~$`), so an end-anchored `pattern` (`X\s*\n` / `X$`) can never bind.
-> For *completion* use `mode:'exit'`; for *content* matching use a bare marker
-> (no `\n`/`$`). `mode:'pattern'` also accepts an optional `quietMs` settle
-> fallback: `until:{mode:'pattern', pattern, quietMs:1000}` completes with
-> `reason:'quiet'` (no `matchedPattern`) once output is stable for that long
-> without a match — instead of hanging until `timeoutMs`. It is opt-in (omit
-> `quietMs` to keep waiting for the pattern; long commands with mid-run silent
-> gaps are unaffected).
+点击——优先级顺序：
 
-### `until:{mode:'exit'}` — real completion + exit code
+```
+browser_click(selector)               → Chrome / Edge（CDP，跨重绘稳定）
+desktop_act(lease, action='click')    → 原生 / 对话框 / 视觉（基于实体；desktop_discover 后使用）
+click_element(name | automationId)    → desktop_act 返回 ok:false 时的原生 UIA 回退
+mouse_click(x, y, origin?, scale?)    → 像素级最后手段；仅用 dotByDot 截图的 origin+scale
+```
 
-The heuristic modes can misfire on the common "append a sentinel" idiom
-(`some-task; echo DONE` matched by `DONE`): the sentinel also shows up in the
-**echoed command line**, and for multi-line commands there is no reliable way to
-tell that echo apart from real output. `mode:'exit'` removes the guesswork — the
-server appends its own completion marker whose *printed* form differs from its
-*typed* form, so it never matches the echoed command (even for multi-line input),
-and it returns the real process exit code:
+恢复提示——每次观察后读取 `response.attention`，`desktop_discover`/`desktop_act` 的 `response.warnings[]`：
+
+- `lease_expired` / `lease_generation_mismatch` / `lease_digest_mismatch` / `entity_not_found` → 重新调用 `desktop_discover`
+- `modal_blocking` → `response.blockingElement`（存在时）命名了阻塞模态；通过 `click_element(name=blockingElement.name)` 关闭后重试
+- `entity_outside_viewport` → `scroll(action='to_element' | 'raw')`，然后重新调用 `desktop_discover`
+- `executor_failed` → 回退到 `click_element` / `mouse_click` / `browser_click`
+
+租约生命周期：
+
+- 每个 `desktop_discover` 响应携带 `softExpiresAtMs`（约 TTL 窗口的 60%）。超过此时间戳 LLM 应考虑重新调用 `desktop_discover`——`lease.expiresAtMs` 是唯一正确性边界。
+- TTL 根据视图模式（`action`/`explore`/`debug`）、实体数量和响应载荷大小自适应。上限 60 秒。
+- 设置 `DESKTOP_TOUCH_DISABLE_FUKUWARAI_V2=1` 回退到 v1 工具面（`get_windows`/`get_ui_elements`/`set_element_value`），仅用于排障——v2 是推荐默认。
+
+---
+
+## 终端命令完成判定（`until`）
+
+`terminal(action='run')` 发送命令、等待完成并读取输出。如何判定"完成"由 `until` 控制：
+
+|| 模式 | 等待内容 | 适用场景 |
+||---|---|---|
+|| `quiet`（默认） | 输出安静 `quietMs` 持续时长 | 短交互命令 |
+|| `pattern` | 输出中预期的字符串/正则 | 有已知结束标记的长命令 |
+|| `exit` | 命令真正**结束** | 需要完成或退出码时 |
+
+> **锚定注意事项（#384）：** 最终行无尾换行的输出会将标记粘合到下一提示符（`printf X` → `Xuser@host:~$`），导致行尾锚定 pattern（`X\s*\n` / `X$`）无法绑定。*完成*检测请用 `mode:'exit'`；内容匹配用裸标记（不加 `\n`/`$`）。`mode:'pattern'` 也接受可选的 `quietMs` 稳定回退：`until:{mode:'pattern', pattern, quietMs:1000}` 在输出稳定指定时长后以 `reason:'quiet'` 完成（无 `matchedPattern`），避免等待至 `timeoutMs`。opt-in 设置（省略则继续等待 pattern；有中途静默间隔的长命令不受影响）。
+
+### `until:{mode:'exit'}` — 真正完成 + 退出码
+
+启发式模式容易误判常见的"追加哨兵"模式（`some-task; echo DONE` 被 `DONE` 匹配→哨兵也出现在**回显命令行**中，多行命令无法从缓冲区区分回显与真实输出）。`mode:'exit'` 结构性解决了这个问题——服务器注入一个**显示形式与输入形式不同**的完成标记，因此永远不会匹配回显（即使是多行输入），并返回真实进程退出码：
 
 ```js
 terminal({
@@ -268,63 +282,53 @@ terminal({
   until: { mode: 'exit', shell: 'powershell' },
 })
 // → completion: { reason: 'exited', exitCode: 0, elapsedMs: … }
-//   output: just the command's real output (the injected marker is stripped)
+//   output: 仅命令的真实输出（注入标记已去除）
 ```
 
-- **Pass `shell` explicitly** (`'bash'` or `'powershell'`). `shell:'auto'` detects
-  the shell from the terminal window, but it cannot see a shell running *inside*
-  SSH or WSL — the window still looks like its local host — so for remote/nested
-  sessions pass the remote side's shell (`auto` otherwise warns and may pick the
-  outer shell). A window whose process is genuinely unidentifiable (e.g. Windows
-  Terminal) returns `ExitModeShellAmbiguous`.
-- **First-class shells:** `bash` and `powershell`. `cmd.exe` is not supported yet
-  (`ExitModeShellUnsupported`).
-- **Unsafe input is rejected up front** (`ExitModeUnsafeInput`) rather than
-  hanging: a command ending mid-construct (unterminated quote, here-doc, `$(…)`,
-  a trailing `\` or PowerShell backtick).
-- Exit mode controls its own delivery, so delivery-shaping `sendOptions`
-  (`method` / `preferClipboard` / `pressEnter` / `chunkSize` / `pasteKey`) are
-  rejected with `InvalidArgs`; focus options remain accepted.
+- **显式传入 `shell`**（`'bash'` 或 `'powershell'`）。`shell:'auto'` 从终端窗口进程检测，但无法看到 SSH/WSL **内部**运行的 shell——窗口仍是本地主机外观。远程/嵌套回话请传入远端 shell（`auto` 否则可能警告并选择外层 shell）。进程真正无法识别的窗口（如 Windows Terminal）返回 `ExitModeShellAmbiguous`。
+- **一等公民 shell：** `bash` 和 `powershell`。`cmd.exe` 尚不支持（`ExitModeShellUnsupported`）。
+- **不安全输入立即拒绝**（`ExitModeUnsafeInput`）：未关闭引号、here-doc、`$(…)`、末尾 `\` 或 PowerShell 反引号等不会挂起，直接拒绝。
+- 退出模式自行控制投递，因此投递相关的 `sendOptions`（`method`/`preferClipboard`/`pressEnter`/`chunkSize`/`pasteKey`）以 `InvalidArgs` 拒绝；焦点选项仍可使用。
 
 ---
 
-## Browser CDP automation
+## 浏览器 CDP 自动化
 
-For web automation, connect Chrome or Edge with the remote debugging port enabled — no Selenium or Playwright needed.
+Web 自动化只需启用 Chrome/Edge 的远程调试端口——无需 Selenium 或 Playwright。
 
 ```bash
-# Launch Chrome in CDP mode
+# 以 CDP 模式启动 Chrome
 chrome.exe --remote-debugging-port=9222 --user-data-dir=C:\tmp\cdp
 ```
 
 ```
-browser_open({launch:{}})                          → spawn-if-needed Chrome in debug mode + list tabs (idempotent)
-browser_open()                                     → connect-only (fail if no CDP endpoint live)
-browser_locate({selector:"#submit"})               → CSS selector → physical screen coords
-browser_click({selector:"#submit"})                → find + click in one step (auto-focuses browser)
-browser_eval({action:"js", expression:"document.title"})  → evaluate JS, returns result
-browser_eval({action:"dom", selector:"#main", maxLength:5000})  → outerHTML, truncated to maxLength chars
-browser_eval({action:"appState"})                  → one-shot SPA state (Next/Nuxt/Remix/Apollo/GitHub react-app/Redux SSR)
-browser_fill({selector:"#email", value:"user@example.com"})  → fill React/Vue/Svelte controlled input (state-safe)
-browser_overview()                                 → links/buttons/inputs + ARIA toggles + viewportPosition per element
-browser_search({by:"text", pattern:"..."})         → grep DOM with confidence ranking
-browser_navigate({url:"https://example.com"})      → navigate via CDP (no address bar interaction)
+browser_open({launch:{}})                          → 按需启动 CDP 调试模式 Chrome + 列出标签页（幂等）
+browser_open()                                     → 仅连接（无 CDP 端点则失败）
+browser_locate({selector:"#submit"})               → CSS 选择器 → 物理屏幕坐标
+browser_click({selector:"#submit"})                → 查找 + 点击一步完成（自动聚焦浏览器）
+browser_eval({action:"js", expression:"document.title"})  → 执行 JS，返回结果
+browser_eval({action:"dom", selector:"#main", maxLength:5000})  → outerHTML，截断到指定字符数
+browser_eval({action:"appState"})                  → 一次性 SPA 状态（Next/Nuxt/Remix/Apollo/GitHub react-app/Redux SSR）
+browser_fill({selector:"#email", value:"user@example.com"})  → 填充 React/Vue/Svelte 受控输入（状态安全）
+browser_overview()                                 → 链接/按钮/输入 + ARIA 切换 + 每元素的 viewportPosition
+browser_search({by:"text", pattern:"..."})         → 以置信度排名 grep DOM
+browser_navigate({url:"https://example.com"})      → 通过 CDP 导航（无需操作地址栏）
 ```
 
-For chained calls in the same tab, pass `includeContext:false` to omit the activeTab/readyState annotation (~150 tok/call saved). Boolean / object params accept the LLM-friendly string spellings (`"true"`, `"{}"`).
+同一标签页的连续调用传入 `includeContext:false` 可省略末尾的 activeTab/readyState 注释（每次调用省 ~150 tok）。布尔/对象参数接受 LLM 友好的字符串拼写（`"true"`、`"{}"`）。
 
-Coordinates returned by `browser_locate` account for the browser chrome (tab strip + address bar height) and `devicePixelRatio`, so they can be passed directly to `mouse_click` without any scaling.
+`browser_locate` 返回的坐标已考虑浏览器 UI（标签条 + 地址栏高度）和 `devicePixelRatio`，可直接传给 `mouse_click` 无需缩放。
 
-**Recommended web workflow:**
+**推荐 Web 工作流：**
 ```
 browser_open({launch:{}}) → browser_eval({action:"dom"}) → browser_locate(selector) → browser_click(selector)
 ```
 
 ---
 
-## Auto-dock CLI on startup
+## 启动时自动停靠 CLI
 
-Keep Claude CLI visible while operating other apps full-screen. Set env vars in your MCP config and the docked window auto-snaps into place every MCP startup.
+MCP 启动时保持 Claude CLI 可见，同时全屏操作其他应用。在 MCP 配置中设置环境变量，停靠窗口将在每次启动时自动就位。
 
 ```json
 {
@@ -345,194 +349,145 @@ Keep Claude CLI visible while operating other apps full-screen. Set env vars in 
 }
 ```
 
-| Env var | Default | Notes |
-|---|---|---|
-| `DESKTOP_TOUCH_DOCK_TITLE` | *(unset = off)* | `@parent` walks the MCP process tree to find the hosting terminal — immune to title / branch / project changes. Or use a literal substring. |
-| `DESKTOP_TOUCH_DOCK_CORNER` | `bottom-right` | `top-left` / `top-right` / `bottom-left` / `bottom-right` |
-| `DESKTOP_TOUCH_DOCK_WIDTH` / `HEIGHT` | `480` / `360` | px (`"480"`) or ratio of work area (`"25%"`) — 4K/8K auto-adapts |
-| `DESKTOP_TOUCH_DOCK_PIN` | `true` | Always-on-top toggle |
-| `DESKTOP_TOUCH_DOCK_MONITOR` | primary | Monitor id from `desktop_state({includeScreen:true})` |
-| `DESKTOP_TOUCH_DOCK_SCALE_DPI` | `false` | If true, multiply px values by `dpi / 96` (opt-in per-monitor scaling) |
-| `DESKTOP_TOUCH_DOCK_MARGIN` | `8` | Screen-edge padding (px) |
-| `DESKTOP_TOUCH_DOCK_TIMEOUT_MS` | `5000` | Max wait for the target window to appear |
+|| 环境变量 | 默认值 | 说明 |
+||---|---|---|
+|| `DESKTOP_TOUCH_DOCK_TITLE` | *（未设置=关闭）* | `@parent` 沿 MCP 进程树查找承载终端——不受标题/分支/项目变化影响。或使用字面子串。 |
+|| `DESKTOP_TOUCH_DOCK_CORNER` | `bottom-right` | `top-left` / `top-right` / `bottom-left` / `bottom-right` |
+|| `DESKTOP_TOUCH_DOCK_WIDTH` / `HEIGHT` | `480` / `360` | px（`"480"`）或工作区比例（`"25%"`）——4K/8K 自动适配 |
+|| `DESKTOP_TOUCH_DOCK_PIN` | `true` | 置顶切换 |
+|| `DESKTOP_TOUCH_DOCK_MONITOR` | 主显示器 | 来自 `desktop_state({includeScreen:true})` 的显示器 ID |
+|| `DESKTOP_TOUCH_DOCK_SCALE_DPI` | `false` | 为 true 时，px 值乘以 `dpi / 96`（按显示器缩放 opt-in） |
+|| `DESKTOP_TOUCH_DOCK_MARGIN` | `8` | 屏幕边缘填充（px） |
+|| `DESKTOP_TOUCH_DOCK_TIMEOUT_MS` | `5000` | 目标窗口出现的最长等待 |
 
-> **Input routing gotcha:** when a pinned window is active (e.g. Claude CLI), `keyboard(action='type')` / `keyboard(action='press')` send keys to it, **not** the app you wanted to type into. Always call `focus_window(title=...)` before keyboard operations, then verify `isActive=true` via `screenshot(detail='meta')`.
+> **输入路由陷阱：** 置顶窗口活动时（如 Claude CLI），`keyboard(action='type')` / `keyboard(action='press')` 会将按键发送到它**而非**你想要输入的应用。始终在键盘操作前调用 `focus_window(title=...)`，然后通过 `screenshot(detail='meta')` 验证 `isActive=true`。
 
-### Screenshot cache (by-ref storage)
+### 截图缓存（by-ref 存储）
 
-`screenshot` and the other visual results return a cheap `screenshot://by-ref/{id}` link to an image saved on disk instead of inlining the pixels every time, so routine look-act-confirm loops cost far fewer tokens. The cache bounds itself automatically and `screenshot_query` / `screenshot_gc` let you inspect and prune it. Tune the storage with:
+`screenshot` 和其他视觉结果返回廉价的 `screenshot://by-ref/{id}` 磁盘链接而非每次内联像素，常规"观察-操作-确认"循环消耗更少 token。缓存自动限制，`screenshot_query` / `screenshot_gc` 可检查和清理。通过以下设置调整存储：
 
-| Env var | Default | Notes |
-|---|---|---|
-| `DESKTOP_TOUCH_SCREENSHOTS_DIR` | *(per-user cache dir)* | Pin the cache to a specific folder. If the default folder can't be created or written (e.g. corporate policy blocking new folders under your profile), the server auto-probes this → the runtime dir → an OS temp folder and uses the first writable one instead of giving up on the cache. |
-| `DESKTOP_TOUCH_SCREENSHOT_MAX_COUNT` | `200` | Keep at most this many captures in the cache. |
-| `DESKTOP_TOUCH_SCREENSHOT_MAX_BYTES` | `256 MiB` | Cap the total cache size on disk. |
-| `DESKTOP_TOUCH_SCREENSHOT_MAX_AGE_MS` | *(off)* | Drop captures older than this many milliseconds (opt-in). |
-| `DESKTOP_TOUCH_SCREENSHOT_AUTOPRUNE` | `on` | Auto-trim the cache as new captures are saved. Set `0` to disable. |
-| `DESKTOP_TOUCH_SCREENSHOT_MIN_EVICT_AGE_MS` | `60000` | Never auto-evict a capture younger than this (ms), so a by-ref link you were just handed survives long enough to open even when another AI/process on the same PC is also capturing. `0` disables. |
+|| 环境变量 | 默认值 | 说明 |
+||---|---|---|
+|| `DESKTOP_TOUCH_SCREENSHOTS_DIR` | *（每用户缓存目录）* | 将缓存固定到指定文件夹。默认文件夹无法创建/写入时（如企业策略阻止），服务器自动探测 → 运行时目录 → OS 临时文件夹，使用第一个可写的 |
+|| `DESKTOP_TOUCH_SCREENSHOT_MAX_COUNT` | `200` | 缓存中最多保留此数量的捕获 |
+|| `DESKTOP_TOUCH_SCREENSHOT_MAX_BYTES` | `256 MiB` | 磁盘缓存总大小上限 |
+|| `DESKTOP_TOUCH_SCREENSHOT_MAX_AGE_MS` | *（关闭）* | 丢弃超过此时长的捕获（ms，opt-in） |
+|| `DESKTOP_TOUCH_SCREENSHOT_AUTOPRUNE` | `on` | 新捕获保存时自动清理缓存。设 `0` 禁用 |
+|| `DESKTOP_TOUCH_SCREENSHOT_MIN_EVICT_AGE_MS` | `60000` | 不自动驱逐小于此年龄的捕获（ms），确保刚获得的 by-ref 链接即使同一 PC 上其他 AI/进程也在捕获时也存活足够久。`0` 禁用 |
 
-### Auto Perception (always-on)
+### 自动感知（Always-on）
 
-Phase 4 privatizes the explicit `perception_*` tool family — the v0.12 Auto
-Perception layer attaches an `attention` signal to every `desktop_state` and
-`desktop_act` response automatically. Action tools also auto-guard when given
-a `windowTitle`. There is no longer a need to register / read / forget lenses
-manually.
+Phase 4 将显式 `perception_*` 工具族私有化——v0.12 自动感知层自动为每个 `desktop_state` 和 `desktop_act` 响应附加 `attention` 信号。传入 `windowTitle` 时操作工具也自动防护。不再需要手动注册/读取/遗忘 lens。
 
 ```
-# desktop_state always returns the attention signal
+# desktop_state 始终返回注意信号
 desktop_state() → {focusedWindow, focusedElement, modal, attention:"ok", ...}
 
-# Action tools auto-guard when windowTitle is given:
+# 操作工具传入 windowTitle 时自动防护：
 keyboard({action:"type", text:"hello", windowTitle:"Notepad"})
-→ post.perception:{status:"ok"}  // unsafe input blocked if guards fail
+→ post.perception:{status:"ok"}  // 防护失败时阻止不安全输入
 
-# When attention is dirty / stale / settling, refresh with desktop_state:
-desktop_state()  // re-evaluates attention via Auto Perception
+# 注意信号 dirty/stale/settling 时，用 desktop_state 刷新：
+desktop_state()  // 通过自动感知重新评估 attention
 ```
 
-For advanced pinned-target workflows, the `lensId` parameter remains on action
-tools (`keyboard`, `mouse_click`, `mouse_drag`, `click_element`,
-`browser_click`, `browser_navigate`, `browser_eval`, `desktop_act`). Omit
-`lensId` for the normal Auto Perception path. The underlying registry, hot
-target cache, and sensor loop are unchanged; only the explicit
-`perception_register / perception_read / perception_forget / perception_list`
-tools were retired.
+高级固定目标工作流，`lensId` 参数在操作工具上保留（`keyboard`、`mouse_click`、`mouse_drag`、`click_element`、`browser_click`、`browser_navigate`、`browser_eval`、`desktop_act`）。省略 `lensId` 走普通自动感知路径。底层注册表、热目标缓存和传感器循环不变；仅停用了显式 `perception_register / perception_read / perception_forget / perception_list` 工具。
 
 ---
 
-## Mouse homing correction
+## 鼠标归位校正
 
-When Claude calls `screenshot(detail='text')` to read coordinates and then `mouse_click` seconds later, the target window may have moved. The homing system corrects this automatically.
+Claude 通过 `screenshot(detail='text')` 获取坐标后数秒调用 `mouse_click` 时，目标窗口可能已经移动。归位系统自动校正此问题。
 
-| Tier | How to enable | Latency | What it does |
-|------|--------------|---------|--------------|
-| 1 | Always-on (if cache exists) | <1ms | Applies (dx, dy) offset when window moved |
-| 2 | Pass `windowTitle` hint | ~100ms | Auto-focuses window if it went behind another |
-| 3 | Pass `elementName`/`elementId` + `windowTitle` | 1–3s | UIA re-query for fresh coords on resize |
+|| 层级 | 启用方式 | 延迟 | 功能 |
+||------|----------|------|------|
+|| 1 | 始终可用（缓存存在时） | <1ms | 应用 (dx, dy) 偏移修正窗口移动 |
+|| 2 | 传入 `windowTitle` 提示 | ~100ms | 窗口被遮挡时自动前置 |
+|| 3 | 传入 `elementName`/`elementId` + `windowTitle` | 1~3s | UIA 重查获取窗口缩放后的新坐标 |
 
 ```
-# Tier 1 only (automatic)
+# 仅层级 1（自动）
 mouse_click(x=500, y=300)
 
-# Tier 1 + 2: also bring window to front if hidden
-mouse_click(x=500, y=300, windowTitle="Notepad")
+# 层级 1 + 2：隐藏窗口自动前置
+mouse_click(x=500, y=300, windowTitle="记事本")
 
-# Tier 1 + 2 + 3: also re-query UIA if window resized
-mouse_click(x=500, y=300, windowTitle="Notepad", elementName="Save")
+# 层级 1 + 2 + 3：窗口缩放时 UIA 重查
+mouse_click(x=500, y=300, windowTitle="记事本", elementName="保存")
 
-# Traction control OFF — no correction
+# 归位关闭 — 不校正
 mouse_click(x=500, y=300, homing=false)
 ```
 
-The `homing` parameter is available on `mouse_click`, `mouse_drag`, and `scroll`. The cache is updated automatically on every `screenshot()`, `desktop_discover()`, `focus_window()`, and `workspace_snapshot()` call.
+`homing` 参数在 `mouse_click`、`mouse_drag` 和 `scroll` 上可用。缓存在每次 `screenshot()`、`desktop_discover()`、`focus_window()`、`workspace_snapshot()` 调用时自动更新。
 
-### `mouse_click` image-local coords (origin + scale)
+### `mouse_click` 图像局部坐标（origin + scale）
 
-When you take a `dotByDot` screenshot with `dotByDotMaxDimension`, the response prints the `origin` and `scale` values. Instead of computing screen coords manually, copy them into `mouse_click`:
+拍摄 `dotByDot` 截图并带 `dotByDotMaxDimension` 时，响应会打印 `origin` 和 `scale` 值。直接复制到 `mouse_click` 而无需手动计算屏幕坐标：
 
 ```
-# Screenshot response:
+# 截图响应：
 #   origin: (0, 120) | scale: 0.6667
-#   To click image pixel (ix, iy): mouse_click(x=ix, y=iy, origin={x:0, y:120}, scale=0.6667)
+#   要点击图像像素 (ix, iy): mouse_click(x=ix, y=iy, origin={x:0, y:120}, scale=0.6667)
 
 mouse_click(x=640, y=300, origin={x:0, y:120}, scale=0.6667, windowTitle="Chrome")
-# Server converts: screen = (0 + 640/0.6667, 120 + 300/0.6667) = (960, 570)
+# 服务器换算: screen = (0 + 640/0.6667, 120 + 300/0.6667) = (960, 570)
 ```
 
-This eliminates a whole class of off-by-one and scale bugs. Without origin/scale, `x`/`y` remain absolute screen pixels (unchanged behavior).
+这消除了整类偏移和缩放错误。不传 origin/scale 时，`x`/`y` 仍为绝对屏幕像素（行为不变）。
 
 ---
 
-## `screenshot` key parameters
+## `screenshot` 关键参数
 
 ```
-detail="image"          — PNG/WebP pixels (default)
-detail="text"           — UIA element JSON + clickAt coords (no image, ~100–300 tok)
-detail="meta"           — Title + region only (cheapest, ~20 tok/window)
-dotByDot=true           — 1:1 WebP; image_px + origin = screen_px
-dotByDotMaxDimension=N  — cap longest edge (response includes scale for coord math)
-grayscale=true          — ~50% smaller for text-heavy captures (code/AWS console)
-region={x,y,w,h}        — with windowTitle: window-local coords (exclude browser chrome)
-                          without: virtual screen coords
-diffMode=true           — I-frame first call, P-frame (changed windows only) after (~160 tok)
-ocrFallback="auto"      — detail='text' auto-fires Windows OCR on uiaSparse or empty
+detail="image"          — PNG/WebP 像素（默认）
+detail="text"           — UIA 元素 JSON + clickAt 坐标（无图像，~100~300 tok）
+detail="meta"           — 仅标题 + 区域（最轻量，~20 tok/窗口）
+dotByDot=true           — 1:1 WebP；图像像素 + origin = 屏幕像素
+dotByDotMaxDimension=N  — 限制最长边（响应包含 scale 用于坐标计算）
+grayscale=true          — 文本密集捕获减小约 50%（代码/AWS 控制台）
+region={x,y,w,h}        — 带 windowTitle：窗口局部坐标（排除浏览器 UI）
+                          不带 windowTitle：虚拟屏幕坐标
+diffMode=true           — 首次调用 I-帧，之后 P-帧（仅变化窗口，~160 tok）
+ocrFallback="auto"      — detail='text' 在 uiaSparse 或为空时自动触发 Windows OCR
 ```
 
-**Recommended Chrome combo** (50–70% data reduction):
+**推荐工作流：**
 ```
-screenshot(windowTitle="Chrome",
-           dotByDot=true, dotByDotMaxDimension=1280, grayscale=true,
-           region={x:0, y:120, width:1920, height:900})  # skip browser chrome
-```
-
-**Recommended workflow:**
-```
-workspace_snapshot()                     → full orientation (resets diff buffer)
-screenshot(detail="text", windowTitle=X) → get actionable[].clickAt coords
-mouse_click(x, y)                        → click directly, no math needed
-screenshot(diffMode=true)                → check only what changed (~160 tok)
+workspace_snapshot()                     → 全面定位（重置 diff 缓冲区）
+screenshot(detail="text", windowTitle=X) → 获取 actionable[].clickAt 坐标
+mouse_click(x, y)                        → 直接点击，无需坐标计算
+screenshot(diffMode=true)                → 仅检查变化（~160 tok）
 ```
 
 ---
 
-## Security
+## 安全机制
 
-### Emergency stop (Failsafe)
+### 紧急停止（Failsafe）
 
-**Move the mouse to the top-left corner of the screen (within 10px of 0,0) to immediately terminate the MCP server.**
+**将鼠标移至屏幕左上角（0,0 附近 10px 以内）即可立即终止 MCP 服务器。**
 
-- **Per-tool check**: `checkFailsafe()` runs before every tool handler
-- **Background monitor**: 500ms polling as a backup for long-running operations
-- Trigger radius: 10px
+- **每次工具调用前检查**：`checkFailsafe()` 在每个工具处理前运行
+- **后台监视器**：500ms 轮询作为长操作的后备
+- 触发半径：10px
 
-### Blocked operations
-
-**`workspace_launch` blocklist:**
-`cmd.exe`, `powershell.exe`, `pwsh.exe`, `wscript.exe`, `cscript.exe`, `mshta.exe`, `regsvr32.exe`, `rundll32.exe`, `msiexec.exe`, `bash.exe`, `wsl.exe` are blocked.
-Script extensions (`.bat`, `.ps1`, `.vbs`, etc.) are rejected. Arguments containing `;`, `&`, `|`, `` ` ``, `$(`, `${` are also rejected.
-
-**`keyboard(action='press')` blocklist:**
-`Win+R` (Run dialog), `Win+X` (admin menu), `Win+S` (search), `Win+L` (lock screen) are blocked.
-
-### PowerShell injection protection
-
-All `-like` patterns in the UIA bridge PowerShell fallback path are sanitized with `escapeLike()`, which escapes wildcard characters (`*`, `?`, `[`, `]`) before they reach PowerShell. When the Rust native engine is active, PowerShell is not invoked for UIA operations.
-
-### Allowlist for `workspace_launch`
-
-Shell interpreters are blocked by default. To allow specific executables, create an allowlist file:
-
-**File locations (searched in order):**
-1. Path in `DESKTOP_TOUCH_ALLOWLIST` environment variable
-2. `~/.claude/desktop-touch-allowlist.json`
-3. `desktop-touch-allowlist.json` in the server's working directory
-
-**Format:**
-```json
-{
-  "allowedExecutables": [
-    "pwsh.exe",
-    "C:\\Tools\\myapp.exe"
-  ]
-}
-```
-
-Changes take effect immediately — no restart needed.
+_注：所有按键组合和应用启动均不受限制。原有的键盘黑名单（Win+R/X/S/L）和应用启动黑名单已被移除，紧急停止是唯一的安全机制。_
 
 ---
 
-## Mouse movement speed
+## 鼠标移动速度
 
-All mouse tools (`mouse_click`, `mouse_drag`, `scroll`) accept an optional `speed` parameter:
+所有鼠标工具（`mouse_click`、`mouse_drag`、`scroll`）接受可选的 `speed` 参数：
 
-| Value | Behavior |
-|---|---|
-| Omitted | Uses the configured default (see below) |
-| `0` | Instant teleport — `setPosition()`, no animation |
-| `1–N` | Animated movement at N px/sec |
+|| 值 | 行为 |
+||---|---|
+|| 省略 | 使用配置的默认值（见下） |
+|| `0` | 瞬移 — `setPosition()`，无动画 |
+|| `1~N` | 以 N px/秒 动画移动 |
 
-**Default speed** is 1500 px/sec. Change it permanently via the `DESKTOP_TOUCH_MOUSE_SPEED` environment variable:
+**默认速度** 1500 px/秒。通过 `DESKTOP_TOUCH_MOUSE_SPEED` 环境变量永久更改：
 
 ```json
 {
@@ -549,15 +504,15 @@ All mouse tools (`mouse_click`, `mouse_drag`, `scroll`) accept an optional `spee
 }
 ```
 
-Common values: `0` = teleport, `1500` = default gentle, `3000` = fast, `5000` = very fast.
+常用值：`0` = 瞬移，`1500` = 默认（柔和），`3000` = 快速，`5000` = 极速。
 
 ---
 
-## Force-Focus (AttachThreadInput)
+## 强制焦点（AttachThreadInput）
 
-Windows foreground-stealing protection can prevent `SetForegroundWindow` from succeeding when another window (such as a pinned Claude CLI) is in the foreground. This causes subsequent keystrokes or clicks to land in the wrong window — a silent failure.
+Windows 前台窃取保护可能阻止 `SetForegroundWindow` 在另一窗口（如置顶的 Claude CLI）处于前台时生效，导致后续按键或点击发送到错误窗口——静默失败。
 
-`mouse_click`, `keyboard(action='type')`, `keyboard(action='press')`, and `terminal(action='send')` all accept a `forceFocus` parameter that bypasses this protection using `AttachThreadInput`:
+`mouse_click`、`keyboard(action='type')`、`keyboard(action='press')`、`terminal(action='send')` 均支持 `forceFocus` 参数，通过 `AttachThreadInput` 绕过此保护：
 
 ```json
 {
@@ -571,9 +526,9 @@ Windows foreground-stealing protection can prevent `SetForegroundWindow` from su
 }
 ```
 
-If the force attempt is refused despite `AttachThreadInput`, the response is `ok:false` with `code: "ForegroundRestricted"` (issue #202 unification — same shape as `focus_window`, `keyboard`, `terminal_send`, `mouse_click`). The action itself is **suppressed** so the keystrokes / click never land on the wrong window. Recover via `focus_window`'s auto-escalate ladder before retrying. The legacy `hints.warnings: ["ForceFocusRefused"]` shape is no longer emitted.
+如果强制尝试即使 `AttachThreadInput` 也被拒绝，响应为 `ok:false` + `code: "ForegroundRestricted"`（问题 #202 统一——与 `focus_window`、`keyboard`、`terminal_send`、`mouse_click` 形状相同）。操作本身**被抑制**，因此按键/点击永远不会到达错误窗口。通过 `focus_window` 的自动升级阶梯恢复焦点后重试。旧 `hints.warnings: ["ForceFocusRefused"]` 形状不再发出。
 
-**Global default via environment variable:**
+**通过环境变量设置全局默认：**
 
 ```json
 {
@@ -587,24 +542,24 @@ If the force attempt is refused despite `AttachThreadInput`, the response is `ok
 }
 ```
 
-Setting `DESKTOP_TOUCH_FORCE_FOCUS=1` makes `forceFocus: true` the default for all four tools without changing each call.
+设置 `DESKTOP_TOUCH_FORCE_FOCUS=1` 使所有四个工具默认 `forceFocus: true`，无需逐次调用修改。
 
-**Known tradeoffs:**
+**已知权衡：**
 
-- During the ~10ms `AttachThreadInput` window, key state and mouse capture are shared between the two threads. In rapid macro sequences this can cause a race condition (rare in practice).
-- Disable `forceFocus` (or unset the env var) when the user is manually operating another app to avoid unexpected focus shifts.
+- 约 10ms `AttachThreadInput` 窗口期间，两个线程共享按键状态和鼠标捕获。快速宏序列中可能引发竞态条件（实践中罕见）。
+- 用户手动操作其他应用时，禁用 `forceFocus`（或取消环境变量）以避免意外焦点切换。
 
 ---
 
-## Auto Guard
+## 自动防护
 
-Action tools (`mouse_click`, `mouse_drag`, `keyboard(action='type'/'press')`, `click_element`, `desktop_act`, `browser_click`, `browser_navigate`) automatically guard each action when you pass `windowTitle` / `tabId`:
+操作工具（`mouse_click`、`mouse_drag`、`keyboard(action='type'/'press')`、`click_element`、`desktop_act`、`browser_click`、`browser_navigate`）传入 `windowTitle`/`tabId` 时自动防护每次操作：
 
-- Verifies target window identity (process restart / HWND replacement detected)
-- Confirms click coordinates are inside the target window rect
-- Returns `post.perception.status` on every response — including failures — so the LLM can recover without a screenshot
+- 验证目标窗口身份（检测进程重启 / HWND 替换）
+- 确认点击坐标在目标窗口矩形内
+- 每次响应返回 `post.perception.status`——包括失败——使 LLM 无需截图即可恢复
 
-**Disabling auto guard** — set `DESKTOP_TOUCH_AUTO_GUARD=0` to restore v0.11.12 behavior (no auto guard):
+**禁用自动防护** — 设置 `DESKTOP_TOUCH_AUTO_GUARD=0` 恢复 v0.11.12 行为（无自动防护）：
 
 ```json
 {
@@ -621,19 +576,19 @@ Action tools (`mouse_click`, `mouse_drag`, `keyboard(action='type'/'press')`, `c
 }
 ```
 
-When auto guard is enabled (default), `post.perception.status` will be one of:
+自动防护启用时（默认），`post.perception.status` 值：
 
-| Status | Meaning |
-|---|---|
-| `ok` | Guard passed — target verified |
-| `unguarded` | `windowTitle` not provided; action ran without guard |
-| `target_not_found` | No window matched the given title |
-| `ambiguous_target` | Multiple windows matched; use a more specific title |
-| `identity_changed` | Window was replaced (process restart / HWND change) |
-| `unsafe_coordinates` | Click coordinates are outside the target window rect |
-| `needs_escalation` | Use `browser_click` or specify `windowTitle` |
+|| 状态 | 含义 |
+||---|---|
+|| `ok` | 防护通过 — 目标已验证 |
+|| `unguarded` | 未提供 `windowTitle`；操作未防护 |
+|| `target_not_found` | 没有窗口匹配给定标题 |
+|| `ambiguous_target` | 多个窗口匹配；使用更具体的标题 |
+|| `identity_changed` | 窗口已被替换（进程重启/HWND 变化） |
+|| `unsafe_coordinates` | 点击坐标在目标窗口矩形外 |
+|| `needs_escalation` | 使用 `browser_click` 或指定 `windowTitle` |
 
-When `unsafe_coordinates` or `identity_changed` is returned, the response may include a `suggestedFix.fixId`. Pass that `fixId` to the relevant tool call to approve the recovery:
+当返回 `unsafe_coordinates` 或 `identity_changed` 时，响应可能包含 `suggestedFix.fixId`。将此 `fixId` 传入相关工具调用以批准恢复：
 
 ```json
 { "name": "mouse_click",           "arguments": { "fixId": "fix-..." } }
@@ -642,25 +597,25 @@ When `unsafe_coordinates` or `identity_changed` is returned, the response may in
 { "name": "browser_click", "arguments": { "fixId": "fix-..." } }
 ```
 
-The fix is one-shot and expires in 15 seconds. The server revalidates the target process identity before executing.
+修复为一次性且 15 秒过期。服务器在执行前重新验证目标进程身份。
 
 ---
 
-## Advanced response options
+## 高级响应选项
 
-### browser_eval Structured Mode
+### browser_eval 结构化模式
 
-Pass `withPerception: true` to receive a structured JSON response with `post.perception` instead of raw text:
+传入 `withPerception: true` 接收带 `post.perception` 的结构化 JSON 响应而非纯文本：
 
 ```json
 { "name": "browser_eval", "arguments": { "expression": "document.title", "withPerception": true } }
 ```
 
-Returns `{ ok: true, result: "...", post: { perception: { status: "ok", ... } } }`.
+返回 `{ ok: true, result: "...", post: { perception: { status: "ok", ... } } }`。
 
-### mouse_drag Cross-Window Guard
+### mouse_drag 跨窗口防护
 
-`mouse_drag` now guards both start and end coordinates. Drags that cross window boundaries (or reach the desktop wallpaper) are blocked by default. To allow intentional cross-window or range-selection drags:
+`mouse_drag` 现在同时防护起点和终点坐标。跨越窗口边界（或到达桌面壁纸）的拖拽默认被阻止。允许有意跨窗口或范围选择拖拽：
 
 ```json
 { "name": "mouse_drag", "arguments": { "startX": 100, "startY": 100, "endX": 900, "endY": 900, "allowCrossWindowDrag": true } }
@@ -668,71 +623,71 @@ Returns `{ ok: true, result: "...", post: { perception: { status: "ok", ... } } 
 
 ---
 
-## Performance (v0.15 — Rust Native Engine)
+## 性能（v0.15 — Rust 原生引擎）
 
-The Rust native engine (`@harusame64/desktop-touch-engine`) replaces PowerShell process spawning with direct COM calls over a persistent MTA thread. It loads automatically as a `.node` addon — no configuration needed.
+Rust 原生引擎（`@harusame64/desktop-touch-engine`）用持久 MTA 线程上的直接 COM 调用替代了 PowerShell 进程启动。它作为 `.node` 插件自动加载——无需配置。
 
-### UIA Benchmark (vs PowerShell baseline)
+### UIA 基准测试（vs PowerShell 基线）
 
-| Function | Rust Native | PowerShell | Speedup |
-|---|---|---|---|
-| `getFocusedElement` | **2.2 ms** | 366 ms | **163.9×** |
-| `getUiElements` (Explorer, ~60 elements) | **106.5 ms** | 346 ms | **3.3×** |
-| **Weighted average** | | | **~82×** |
+|| 函数 | Rust 原生 | PowerShell | 加速比 |
+||---|---|---|---|
+|| `getFocusedElement` | **2.2 ms** | 366 ms | **163.9×** |
+|| `getUiElements`（资源管理器，~60 元素） | **106.5 ms** | 346 ms | **3.3×** |
+|| **加权平均** | | | **~82×** |
 
-### Image Diff Benchmark (SSE2 SIMD)
+### 图像差分基准测试（SSE2 SIMD）
 
-| Function | Rust (SSE2) | TypeScript | Speedup |
-|---|---|---|---|
-| `computeChangeFraction` (1920×1080) | **0.26 ms** | 3.8 ms | **~15×** |
-| `dHash` (perceptual hash) | **0.09 ms** | 1.2 ms | **~13×** |
+|| 函数 | Rust（SSE2） | TypeScript | 加速比 |
+||---|---|---|---|
+|| `computeChangeFraction`（1920×1080） | **0.26 ms** | 3.8 ms | **~15×** |
+|| `dHash`（感知哈希） | **0.09 ms** | 1.2 ms | **~13×** |
 
-### Architecture
+### 架构
 
 ```
-Claude CLI / MCP Client
-    │  stdio or HTTP (MCP protocol)
+Claude CLI / MCP 客户端
+    │  stdio 或 HTTP（MCP 协议）
     ▼
 desktop-touch-mcp (TypeScript)
     │
-    ├── Rust Native Engine (.node addon)          ← NEW in v0.15
-    │   ├── UIA: 13 functions via napi-rs + windows-rs 0.62
-    │   │   └── Dedicated COM thread (MTA) + batch BFS algorithm
-    │   └── Image: SSE2 SIMD pixel diff + perceptual hashing
+    ├── Rust 原生引擎（.node 插件）          ← v0.15 新增
+    │   ├── UIA: 通过 napi-rs + windows-rs 0.62 实现 13 个函数
+    │   │   └── 专用 COM 线程（MTA）+ 批量 BFS 算法
+    │   └── 图像: SSE2 SIMD 像素差分 + 感知哈希
     │
-    └── PowerShell Fallback (automatic)
-        └── Activates transparently if .node is unavailable
+    └── PowerShell 回退（自动）
+        └── .node 不可用时透明激活
 ```
 
-### Why `getUiElements` is 3.3× (not 160×)
+### 为什么 `getUiElements` 只有 3.3×（不是 160×）
 
-The 160× speedup on `getFocusedElement` comes from eliminating PowerShell process startup (~200 ms) and .NET assembly loading. For `getUiElements`, the bottleneck shifts to the **UIA provider** inside the target application (e.g., Explorer) — it must enumerate its UI tree regardless of who asks. The Rust engine uses a **batch BFS algorithm** (`FindAllBuildCache` + `TreeScope_Children`) that minimizes cross-process RPC calls and supports `maxElements` early exit, making it dramatically faster on large trees (VS Code, browsers with 1000+ elements).
+`getFocusedElement` 的 160× 加速来自消除 PowerShell 进程启动（~200 ms）和 .NET 程序集加载。`getUiElements` 的瓶颈转移到目标应用（如资源管理器）内的 **UIA 提供者**——无论谁请求，它都必须枚举 UI 树。Rust 引擎使用**批量 BFS 算法**（`FindAllBuildCache` + `TreeScope_Children`）最小化跨进程 RPC 调用并支持 `maxElements` 早期退出，使其在大树（VS Code、含 1000+ 元素的浏览器）上显著更快。
 
 ---
 
-## UI Operating Layer (V2)
+## UI 操作层（V2）
 
-> **Status: Default ON since v0.17.** `desktop_discover` and `desktop_act` are available out of the box.
+> **状态：v0.17 起默认开启。** `desktop_discover` 和 `desktop_act` 开箱即用。
 
-V2 introduces two new tools that replace coordinate-based clicking with entity-based interaction:
+V2 引入两个新工具，用基于实体的交互替代基于坐标的点击：
 
-| Tool | Description |
-|---|---|
-| `desktop_discover` | Observe a window or browser tab. Returns interactive entities with leases — no raw screen coordinates. Supports UIA (native), CDP (browser), terminal, and visual GPU lanes. |
-| `desktop_act` | Interact with an entity returned by `desktop_discover`. Validates the lease before executing. Returns a semantic diff (`entity_disappeared`, `modal_appeared`, `focus_shifted`, …). On visual-only targets a successful act can bundle a `roiCapture` (a PNG crop of the changed region + a lease-less next-target preview) so you confirm the result and find the next target in one call — controlled by `returnCapture` (`on-change`, the default on a visible change; `never` to suppress; `always` to force). |
+|| 工具 | 说明 |
+||---|---|
+|| `desktop_discover` | 观察窗口或浏览器标签。返回带租约的可交互实体——不含原始屏幕坐标。支持 UIA（原生）、CDP（浏览器）、终端和视觉 GPU 通道。 |
+|| `desktop_act` | 与 `desktop_discover` 返回的实体交互。执行前验证租约。返回语义差异（`entity_disappeared`、`modal_appeared`、`focus_shifted`…）。视觉目标成功时可附带 `roiCapture`（变化区域 PNG 裁剪 + 无租约下一目标预览），由 `returnCapture` 控制（`on-change`，可见变化时的默认值；`never` 抑制；`always` 强制）。 |
 
-### Clicking — priority order
+### 点击——优先级顺序
 
-When multiple tools could perform the same click, prefer them in this order:
+多个工具都能执行同一点击时，按此顺序优先：
 
-1. `browser_click(selector)` — Chrome / Edge over CDP (stable across repaints)
-2. `desktop_act(lease)` — native windows, dialogs, visual-only targets (entity-based; use after `desktop_discover`)
-3. `click_element(name | automationId)` — native UIA fallback when `desktop_act` returns `ok:false`
-4. `mouse_click(x, y)` — pixel-level last resort (`origin` + `scale` from `dotByDot` screenshots only)
+1. `browser_click(selector)` — Chrome / Edge 通过 CDP（跨重绘稳定）
+2. `desktop_act(lease)` — 原生窗口、对话框、视觉目标（基于实体；`desktop_discover` 后使用）
+3. `click_element(name | automationId)` — `desktop_act` 返回 `ok:false` 时的原生 UIA 回退
+4. `mouse_click(x, y)` — 像素级最后手段（仅用 `dotByDot` 截图的 `origin` + `scale`）
 
-### Disabling V2 (kill switch)
+### 禁用 V2（关闭开关）
 
-To hide `desktop_discover` / `desktop_act` from the tool catalog, add the disable flag and restart:
+要从工具目录中隐藏 `desktop_discover` / `desktop_act`，添加禁用标志并重启：
 
 ```json
 {
@@ -749,69 +704,66 @@ To hide `desktop_discover` / `desktop_act` from the tool catalog, add the disabl
 }
 ```
 
-All V1 tools continue to work without interruption — no reinstall required. Remove the env entry and restart to re-enable.
+所有 V1 工具继续正常工作——无需重新安装。移除环境条目并重启可重新启用。
 
-Flag semantics (exact-match: only the literal string `"1"` counts):
+标志语义（精确匹配：仅字面字符串 `"1"` 有效）：
 
-| `DISABLE_FUKUWARAI_V2` | V2 state |
-|---|---|
-| unset / not `"1"` | **ON** (default) |
-| `"1"` | **OFF** (kill switch) |
+|| `DISABLE_FUKUWARAI_V2` | V2 状态 |
+||---|---|
+|| 未设置 / 非 `"1"` | **开启**（默认） |
+|| `"1"` | **关闭**（关闭开关） |
 
-### Removed: `DESKTOP_TOUCH_ENABLE_FUKUWARAI_V2`
+### 已移除：`DESKTOP_TOUCH_ENABLE_FUKUWARAI_V2`
 
-This was the opt-in switch in v0.16.x. V2 is on by default since v0.17, so the flag no longer has any effect and is safe to delete from your config. To turn V2 off, set `DESKTOP_TOUCH_DISABLE_FUKUWARAI_V2=1`.
+这是 v0.16.x 的 opt-in 开关。v0.17 起 V2 默认开启，此标志不再有效果，可安全从配置中删除。关闭 V2 请设 `DESKTOP_TOUCH_DISABLE_FUKUWARAI_V2=1`。
 
-### Recovery when V2 fails
+### V2 失败时的恢复
 
-If `desktop_act` returns `ok: false`, read `reason` and follow the built-in recovery hints in the tool description. Common paths:
+`desktop_act` 返回 `ok: false` 时，读取 `reason` 并遵循工具描述中内置的恢复提示。常见路径：
 
-- `lease_expired` / `*_mismatch` / `entity_not_found` → re-call `desktop_discover`
-- `modal_blocking` → `response.blockingElement` (when present) carries `{ name, role, automationId? }`; dismiss with `click_element(name=blockingElement.name)`, then retry
-- `entity_outside_viewport` → `scroll` / `scroll(action='to_element')`, then re-call `desktop_discover`
-- `executor_failed` → fall back to `click_element` / `mouse_click` / `browser_click`
+- `lease_expired` / `*_mismatch` / `entity_not_found` → 重调 `desktop_discover`
+- `modal_blocking` → `response.blockingElement`（存在时）携带 `{ name, role, automationId? }`；用 `click_element(name=blockingElement.name)` 关闭后重试
+- `entity_outside_viewport` → `scroll` / `scroll(action='to_element')`，然后重调 `desktop_discover`
+- `executor_failed` → 回退到 `click_element` / `mouse_click` / `browser_click`
 
-For `desktop_discover` warnings (`visual_provider_unavailable`, `visual_provider_warming`, `cdp_provider_failed`, …), the coordinate-based tools (`screenshot(detail='text')`, `click_element`, `mouse_click`, `terminal`, …) remain available as an escape hatch.
-
----
-
-## Known limitations
-
-| Limitation | Detail | Workaround |
-|---|---|---|
-| Games / video players may return black or hang in PrintWindow capture | DirectX fullscreen apps may not redraw under `PW_RENDERFULLCONTENT`. Window-targeted `screenshot(detail='image')` already falls back to BitBlt automatically when PrintWindow returns no data or an all-black + zero-variance frame, but DirectX surfaces that hang the call don't surface as fallback. | Retry with `screenshot({mode:'background', fullContent:false})` to switch to the legacy PrintWindow flag; if still black, the BitBlt fallback path (default `mode='normal'`) will at least return the on-screen rect — `hints.captureFallbackReason` will say `printwindow-all-black` |
-| UIA call overhead | ~2 ms (focus) / ~100 ms (tree) via Rust native engine; ~300 ms via PowerShell fallback | Rust engine loads automatically; `workspace_snapshot` uses a 2 s timeout internally |
-| Chrome / WinUI3 UIA elements are empty | Chromium exposes only limited UIA | `screenshot(detail='text')` auto-detects Chromium and falls back to Windows OCR (`hints.chromiumGuard=true`). For richer DOM access use `browser_open` + `browser_locate` |
-| Chromium title-regex misses when sites rewrite `document.title` | Guard relies on the ` - Google Chrome` suffix being present; some sites push it off the end of a long title | Title is treated as plain Chrome (UIA runs). OCR path is still reachable via `ocrFallback='always'` or when UIA returns `<5` elements (`uiaSparse`) |
-| `browser_*` CDP tools need Chrome launched with `--remote-debugging-port` | If Chrome is already running on the default profile without the flag, `browser_open` fails. The CDP E2E suite (`tests/e2e/browser-cdp.test.ts`) will also fail in that state | Close Chrome first, then `browser_open({launch:{}})` will relaunch it in debug mode, or start Chrome manually with `--remote-debugging-port=9222 --user-data-dir=C:\tmp\cdp` |
-| Layer buffer TTL | Buffer auto-clears after 90s of inactivity → next `diffMode` becomes an I-frame | After long waits, call `workspace_snapshot` to explicitly reset the buffer |
-| `keyboard(action='type')` / `keyboard(action='press')` follow focus | When `window_dock(action='dock')(pin=true)` keeps another window on top (e.g. Claude CLI), keystrokes may be absorbed by that window | Call `focus_window(title=...)` first and verify `isActive=true` via `screenshot(detail='meta')` before sending keys |
-| `keyboard(action='type')` em-dash / smart quotes in Chrome/Edge | Non-ASCII punctuation (em-dash `—`, en-dash `–`, smart quotes `"" ''`) can be intercepted as keyboard accelerators, shifting focus to the address bar | Always use `use_clipboard=true` when the text contains such characters |
-| `browser_eval(action='js')` on React / Vue / Svelte inputs | Setting `element.value = ...` or dispatching synthetic events does not update the framework's internal state | Use `browser_fill(selector, value)` — it uses native prototype setter + InputEvent which does update React/Vue/Svelte state |
+`desktop_discover` 警告（`visual_provider_unavailable`、`visual_provider_warming`、`cdp_provider_failed`…）时，基于坐标的工具（`screenshot(detail='text')`、`click_element`、`mouse_click`、`terminal`…）仍可作为逃生通道。
 
 ---
 
-## Token cost reference
+## 已知限制
 
-| Mode | Tokens | Use case |
-|---|---|---|
-| `screenshot` (768px PNG) | ~443 tok | General visual check |
-| `screenshot(dotByDot=true)` window | ~800 tok | Precise clicking (no coordinate math) |
-| `screenshot(diffMode=true)` | ~160 tok | Post-action diff |
-| `screenshot(detail="text")` | ~100–300 tok | UI interaction (no image) |
-| `workspace_snapshot` | ~2000 tok | Full session orientation |
-
----
-
-## 🚀 3,000+ Downloads!
-
-This project just passed **3,000+ downloads**. Huge thanks to everyone who
-tried an experimental desktop-automation MCP server, filed issues, opened PRs,
-and shared what broke. Every bug report made the next release better.
-Thank you for building with me!
+|| 限制 | 细节 | 变通方法 |
+||---|---|---|
+|| 游戏/视频播放器可能在 PrintWindow 捕获中返回黑屏或挂起 | DirectX 全屏应用可能不会在 `PW_RENDERFULLCONTENT` 下重绘。窗口目标 `screenshot(detail='image')` 在 PrintWindow 返回无数据或全黑+零方差帧时已自动回退到 BitBlt，但挂起调用的 DirectX 表面不会触发回退。 | 重试 `screenshot({mode:'background', fullContent:false})` 使用旧 PrintWindow 标志；仍黑屏则 BitBlt 回退路径（默认 `mode='normal'`）至少返回屏幕上的矩形——`hints.captureFallbackReason` 会报告 `printwindow-all-black` |
+|| UIA 调用开销 | Rust 原生引擎 ~2ms（焦点）/ ~100ms（树）；PowerShell 回退 ~300ms | Rust 引擎自动加载；`workspace_snapshot` 内部使用 2 秒超时 |
+|| Chrome/WinUI3 UIA 元素为空 | Chromium 仅暴露有限 UIA | `screenshot(detail='text')` 自动检测 Chromium 并回退到 Windows OCR（`hints.chromiumGuard=true`）。更丰富的 DOM 访问用 `browser_open` + `browser_locate` |
+|| 网站重写 `document.title` 时 Chromium 标题正则匹配失败 | 防护依赖 ` - Google Chrome` 后缀存在；部分网站将其推到长标题末尾外 | 标题被视为普通 Chrome（走 UIA）。OCR 路径仍可通过 `ocrFallback='always'` 或 UIA 返回 <5 元素时（`uiaSparse`）触发 |
+|| `browser_*` CDP 工具需要 Chrome 以 `--remote-debugging-port` 启动 | 如 Chrome 已以默认配置运行且未带该标志，`browser_open` 失败。CDP E2E 测试套件在该状态下也会失败 | 先关闭 Chrome，然后 `browser_open({launch:{}})` 将以调试模式重新启动，或手动以 `--remote-debugging-port=9222 --user-data-dir=C:\tmp\cdp` 启动 |
+|| 图层缓冲区 TTL | 缓冲区在 90 秒不活动后自动清除 → 下一次 `diffMode` 变为 I-帧 | 长等待后调用 `workspace_snapshot` 显式重置缓冲区 |
+|| `keyboard(action='type')` / `keyboard(action='press')` 跟随焦点 | `window_dock(action='dock')(pin=true)` 使另一窗口置顶时（如 Claude CLI），按键可能被该窗口吸收 | 先调用 `focus_window(title=...)` 并通过 `screenshot(detail='meta')` 验证 `isActive=true` 再发送按键 |
+|| Chrome/Edge 中 `keyboard(action='type')` 的长破折号/智能引号 | 非 ASCII 标点（长破折号 `—`、短破折号 `–`、智能引号 `"" ''`）可能被键盘加速器拦截，导致焦点跳转地址栏 | 文本包含此类字符时始终使用 `use_clipboard=true` |
+|| React/Vue/Svelte 输入框的 `browser_eval(action='js')` | 设置 `element.value = ...` 或分派合成事件不会更新框架内部状态 | 使用 `browser_fill(selector, value)` — 它使用原生原型 setter + InputEvent，可正确更新 React/Vue/Svelte 状态 |
 
 ---
 
-## License
+## Token 成本参考
+
+|| 模式 | Token | 用途 |
+||---|---|---|
+|| `screenshot`（768px PNG） | ~443 tok | 一般视觉检查 |
+|| `screenshot(dotByDot=true)` 窗口 | ~800 tok | 精确点击（无需坐标计算） |
+|| `screenshot(diffMode=true)` | ~160 tok | 操作后差异检查 |
+|| `screenshot(detail="text")` | ~100~300 tok | UI 交互（无图像） |
+|| `workspace_snapshot` | ~2000 tok | 完整会话概览 |
+
+---
+
+## 🚀 3,000+ 下载！
+
+本项目刚突破 **3,000+ 下载**。衷心感谢每一位尝试实验性桌面自动化 MCP 服务器、提交问题、发起 PR 和分享 bug 的人。每个 bug 报告都让下一个版本变得更好。感谢与我一起构建！
+
+---
+
+## 许可证
 
 MIT

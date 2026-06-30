@@ -1,7 +1,19 @@
 #!/usr/bin/env node
 
+/**
+ * desktop-touch-mcp 简化启动器
+ *
+ * 安装流程：
+ *   1. 从 GitHub Releases 下载预编译 zip 包
+ *   2. 解压到 ~/.desktop-touch-mcp/releases/<tag>/
+ *   3. 从解压目录启动 node dist/index.js
+ *
+ * 无需 npx、npm install 或构建步骤。
+ * 支持 stdio 和 HTTP (--http) 两种传输模式。
+ */
+
 import { execFile, spawn } from "node:child_process";
-import { createReadStream, createWriteStream, existsSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   mkdir,
@@ -18,6 +30,8 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
+// ── Version & release config ──────────────────────────────────────────────────
+
 const PACKAGE_VERSION = "1.11.0";
 const RELEASE_TAG = `v${PACKAGE_VERSION}`;
 const REPO_API_URL = `https://api.github.com/repos/Harusame64/desktop-touch-mcp/releases/tags/${RELEASE_TAG}`;
@@ -28,58 +42,46 @@ const RELEASE_MANIFEST = {
   assetName: ASSET_NAME,
   sha256: "PENDING",
 };
+
 const CACHE_ROOT = process.env.DESKTOP_TOUCH_MCP_HOME
   ? path.resolve(process.env.DESKTOP_TOUCH_MCP_HOME)
   : path.join(os.homedir(), ".desktop-touch-mcp");
 const RELEASES_DIR = path.join(CACHE_ROOT, "releases");
 const CURRENT_FILE = path.join(CACHE_ROOT, "current.json");
 
+// ── Logging helpers ──────────────────────────────────────────────────────────
+
 function log(message) {
   console.error(`[desktop-touch-mcp] ${message}`);
 }
-
 function warn(message) {
-  console.error(`[desktop-touch-mcp] WARNING: ${message}`);
+  console.error(`[desktop-touch-mcp] 警告: ${message}`);
 }
-
 function fail(message) {
   console.error(`[desktop-touch-mcp] ${message}`);
   process.exit(1);
 }
 
-/**
- * Opt-in escape hatch for running the launcher from a source tree whose
- * RELEASE_MANIFEST.sha256 is still the "PENDING" placeholder (i.e. the
- * release workflow has not finalized the manifest). Published npm packages
- * always ship a real SHA256, so end users never need this.
- */
+// ── Allow unverified release (dev mode) ──────────────────────────────────────
+
 function allowUnverifiedRelease() {
   return process.env.DESKTOP_TOUCH_MCP_ALLOW_UNVERIFIED === "1";
 }
 
-/**
- * Reads the GitHub token from the environment.
- * Supports both GITHUB_TOKEN (GitHub Actions standard) and GH_TOKEN (gh CLI).
- */
+// ── GitHub API helpers ────────────────────────────────────────────────────────
+
 function getGitHubToken() {
   return process.env.GITHUB_TOKEN || process.env.GH_TOKEN || null;
 }
 
-/**
- * Returns headers for GitHub API and release download requests.
- * Includes Authorization when a token is available to avoid rate limits.
- */
 function getGitHubHeaders(extra = {}) {
-  const headers = {
-    "User-Agent": "desktop-touch-mcp-launcher",
-    ...extra,
-  };
+  const headers = { "User-Agent": "desktop-touch-mcp-launcher", ...extra };
   const token = getGitHubToken();
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   return headers;
 }
+
+// ── Stdio wiring ─────────────────────────────────────────────────────────────
 
 export function isDisconnectError(error) {
   return error?.code === "EPIPE" || error?.code === "ERR_STREAM_DESTROYED";
@@ -104,11 +106,7 @@ export function wireLauncherStdio(child, options = {}) {
   function requestChildShutdown() {
     if (shutdownRequested) return;
     shutdownRequested = true;
-    try {
-      child.stdin?.end();
-    } catch {
-      // ignore
-    }
+    try { child.stdin?.end(); } catch { /* ignore */ }
     forcedShutdownTimer = setTimeout(() => {
       if (child.exitCode === null && !child.killed) {
         try { child.kill("SIGTERM"); } catch { /* ignore */ }
@@ -133,9 +131,7 @@ export function wireLauncherStdio(child, options = {}) {
   parentStdin.on("error", requestChildShutdown);
 
   const onParentOutputError = (error) => {
-    if (isDisconnectError(error)) {
-      terminateChild();
-    }
+    if (isDisconnectError(error)) terminateChild();
   };
   parentStdout.on("error", onParentOutputError);
   parentStderr.on("error", onParentOutputError);
@@ -145,6 +141,8 @@ export function wireLauncherStdio(child, options = {}) {
   });
   child.on("exit", clearForcedShutdownTimer);
 }
+
+// ── Release directory helpers ────────────────────────────────────────────────
 
 function tagToDirName(tagName) {
   const safe = String(tagName || "latest").replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -159,28 +157,20 @@ function releaseMetadataPath(releaseDir) {
   return path.join(releaseDir, RELEASE_METADATA_FILE);
 }
 
+// ── Release validation ───────────────────────────────────────────────────────
+
 function expectedReleaseSpec() {
   if (RELEASE_MANIFEST.tagName !== RELEASE_TAG) {
-    throw new Error(
-      `Release manifest mismatch: PACKAGE_VERSION=${PACKAGE_VERSION}, manifest=${RELEASE_MANIFEST.tagName}`
-    );
+    throw new Error(`Release manifest mismatch: PACKAGE_VERSION=${PACKAGE_VERSION}, manifest=${RELEASE_MANIFEST.tagName}`);
   }
   if (!RELEASE_MANIFEST.sha256 || RELEASE_MANIFEST.assetName !== ASSET_NAME) {
     throw new Error(`Missing release manifest for ${RELEASE_TAG}`);
   }
-  // "PENDING" is the pre-release placeholder set in source. The release
-  // workflow (scripts/update-sha.mjs) replaces it with the real zip SHA256
-  // before npm publish, so a PENDING manifest at runtime means this launcher
-  // was not finalized — fail closed by default so an accidentally published
-  // launcher can never silently run an unverified runtime zip. Developers
-  // running straight from source can opt in to skipping verification with
-  // DESKTOP_TOUCH_MCP_ALLOW_UNVERIFIED=1.
   const isPending = RELEASE_MANIFEST.sha256 === "PENDING";
   if (isPending && !allowUnverifiedRelease()) {
     throw new Error(
-      `Release SHA256 manifest for ${RELEASE_TAG} is PENDING — this launcher was not finalized by the release workflow. ` +
-      `Published npm packages always ship a real SHA256. If you are intentionally running the launcher from source, ` +
-      `set DESKTOP_TOUCH_MCP_ALLOW_UNVERIFIED=1 to skip integrity verification (development only).`
+      `Release SHA256 manifest for ${RELEASE_TAG} is PENDING. ` +
+      `Set DESKTOP_TOUCH_MCP_ALLOW_UNVERIFIED=1 to skip verification (dev only).`
     );
   }
   if (!isPending && !/^[a-f0-9]{64}$/i.test(RELEASE_MANIFEST.sha256)) {
@@ -194,13 +184,13 @@ function expectedReleaseSpec() {
   };
 }
 
+// ── Release metadata I/O ─────────────────────────────────────────────────────
+
 async function readReleaseMetadata(releaseDir) {
   try {
     const raw = await readFile(releaseMetadataPath(releaseDir), "utf8");
     return JSON.parse(raw);
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 async function isInstalled(releaseDir, expected) {
@@ -208,7 +198,6 @@ async function isInstalled(releaseDir, expected) {
   const metadata = await readReleaseMetadata(releaseDir);
   if (!metadata) return false;
   if (metadata.tagName !== expected.tagName || metadata.assetName !== expected.assetName) return false;
-  // Skip SHA256 check when the manifest is still PENDING.
   if (expected.sha256 !== null) {
     if (String(metadata.sha256 || "").toLowerCase() !== expected.sha256) return false;
   }
@@ -226,9 +215,7 @@ async function readCurrentRelease(expected) {
     const releaseDir = releaseDirForTag(parsed.tagName);
     if (!(await isInstalled(releaseDir, expected))) return null;
     return { tagName: parsed.tagName, releaseDir };
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 async function writeReleaseMetadata(releaseDir, expected) {
@@ -248,26 +235,22 @@ async function writeCurrentRelease(expected) {
   );
 }
 
+// ── GitHub release fetch ─────────────────────────────────────────────────────
+
 async function fetchReleaseByTag(expected) {
   const response = await fetch(REPO_API_URL, {
-    headers: getGitHubHeaders({
-      "Accept": "application/vnd.github+json",
-    }),
+    headers: getGitHubHeaders({ "Accept": "application/vnd.github+json" }),
   });
-
   if (!response.ok) {
     throw new Error(`GitHub Releases API returned ${response.status} ${response.statusText} for ${expected.tagName}`);
   }
-
   const release = await response.json();
   const asset = Array.isArray(release.assets)
     ? release.assets.find((entry) => entry?.name === ASSET_NAME)
     : undefined;
-
   if (!release.tag_name || !asset?.browser_download_url) {
     throw new Error(`Release ${expected.tagName} does not contain ${ASSET_NAME}`);
   }
-
   const tagName = String(release.tag_name);
   if (!/^v\d+\.\d+\.\d+$/.test(tagName)) {
     throw new Error(`Unexpected tag format: ${tagName}`);
@@ -275,12 +258,10 @@ async function fetchReleaseByTag(expected) {
   if (tagName !== expected.tagName) {
     throw new Error(`Unexpected tag: expected ${expected.tagName}, got ${tagName}`);
   }
-
-  return {
-    tagName,
-    assetUrl: asset.browser_download_url,
-  };
+  return { tagName, assetUrl: asset.browser_download_url };
 }
+
+// ── SHA-256 verification ─────────────────────────────────────────────────────
 
 async function sha256File(filePath) {
   const hash = createHash("sha256");
@@ -301,20 +282,20 @@ async function verifySha256(filePath, expectedSha256) {
   }
 }
 
-async function downloadFile(url, destination) {
-  const response = await fetch(url, {
-    headers: getGitHubHeaders(),
-  });
+// ── File download ─────────────────────────────────────────────────────────────
 
+async function downloadFile(url, destination) {
+  const response = await fetch(url, { headers: getGitHubHeaders() });
   if (!response.ok) {
     throw new Error(`Download failed with ${response.status} ${response.statusText}`);
   }
   if (!response.body) {
     throw new Error("Download response did not include a body");
   }
-
   await pipeline(Readable.fromWeb(response.body), createWriteStream(destination));
 }
+
+// ── Zip extraction ────────────────────────────────────────────────────────────
 
 function run(command, args) {
   return new Promise((resolve, reject) => {
@@ -333,7 +314,6 @@ function run(command, args) {
 async function expandZip(zipPath, destination) {
   const script = "& { param($zip, $dest) Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force }";
   const args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script, zipPath, destination];
-
   try {
     await run("powershell.exe", args);
   } catch (error) {
@@ -344,33 +324,31 @@ async function expandZip(zipPath, destination) {
 
 async function findExtractedRoot(extractDir) {
   if (existsSync(path.join(extractDir, "dist", "index.js"))) return extractDir;
-
   const entries = await readdir(extractDir, { withFileTypes: true });
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const candidate = path.join(extractDir, entry.name);
     if (existsSync(path.join(candidate, "dist", "index.js"))) return candidate;
   }
-
   throw new Error("Release zip did not contain dist/index.js");
 }
 
+// ── Install from release ─────────────────────────────────────────────────────
+
 async function installRelease(release, expected) {
   await mkdir(RELEASES_DIR, { recursive: true });
-
   const targetDir = releaseDirForTag(release.tagName);
   const tempDir = await mkdtemp(path.join(CACHE_ROOT, "download-"));
   const zipPath = path.join(tempDir, ASSET_NAME);
   const extractDir = path.join(tempDir, "extract");
 
   try {
-    log(`Downloading ${ASSET_NAME} from ${release.tagName}`);
+    log(`正在从 ${release.tagName} 下载 ${ASSET_NAME}...`);
     await downloadFile(release.assetUrl, zipPath);
     if (expected.sha256 !== null) {
       await verifySha256(zipPath, expected.sha256);
     } else {
-      warn("SHA256 manifest is PENDING and DESKTOP_TOUCH_MCP_ALLOW_UNVERIFIED=1 is set — " +
-           "skipping integrity verification of the downloaded zip. Development use only.");
+      warn("SHA256 清单状态为 PENDING — 跳过完整性验证（仅限开发环境）。");
     }
     await mkdir(extractDir, { recursive: true });
     await expandZip(zipPath, extractDir);
@@ -380,12 +358,14 @@ async function installRelease(release, expected) {
     await rename(extractedRoot, targetDir);
     await writeReleaseMetadata(targetDir, expected);
     await writeCurrentRelease(expected);
-    log(`Installed ${release.tagName} to ${targetDir}`);
+    log(`已安装 ${release.tagName} 到 ${targetDir}`);
     return targetDir;
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 }
+
+// ── Ensure release is installed ──────────────────────────────────────────────
 
 async function ensureRelease() {
   const expected = expectedReleaseSpec();
@@ -394,16 +374,14 @@ async function ensureRelease() {
     await writeCurrentRelease(expected);
     return targetDir;
   }
-
   const current = await readCurrentRelease(expected);
-  if (current) {
-    return current.releaseDir;
-  }
+  if (current) return current.releaseDir;
 
   const release = await fetchReleaseByTag(expected);
-
   return installRelease(release, expected);
 }
+
+// ── Launch server ─────────────────────────────────────────────────────────────
 
 function launchServer(releaseDir) {
   const entry = path.join(releaseDir, "dist", "index.js");
@@ -422,26 +400,55 @@ function launchServer(releaseDir) {
   }
 
   child.on("error", (error) => {
-    fail(`Failed to start release runtime: ${error.message}`);
+    fail(`启动运行时失败: ${error.message}`);
   });
 
   child.on("exit", (code, signal) => {
-    if (signal) {
-      process.exit(1);
-      return;
-    }
+    if (signal) { process.exit(1); return; }
     process.exit(code ?? 0);
   });
 }
 
+// ── Main entry ────────────────────────────────────────────────────────────────
+
 async function main() {
-  if (process.platform !== "win32") {
-    fail("The npm launcher currently installs the Windows release build only.");
+  // Print help
+  const args = process.argv.slice(2);
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(`desktop-touch-mcp v${PACKAGE_VERSION}
+
+用法: desktop-touch-mcp [选项]
+
+快速安装（无需 npm/npx）：
+  1. 下载:  curl -LO https://github.com/Harusame64/desktop-touch-mcp/releases/download/${RELEASE_TAG}/desktop-touch-mcp-windows.zip
+  2. 解压:   Expand-Archive desktop-touch-mcp-windows.zip -DestinationPath C:\\desktop-touch-mcp
+  3. stdio: node C:\\desktop-touch-mcp\\dist\\index.js
+  4. HTTP:  node C:\\desktop-touch-mcp\\dist\\index.js --http --port 23847 --key YOUR_KEY
+
+选项:
+  --http          使用 Streamable HTTP 传输（默认: stdio）
+  --port <端口>   HTTP 端口（默认: 23847，需配合 --http）
+  --host <地址>   HTTP 绑定地址（默认: 0.0.0.0，需配合 --http）
+  --key <密钥>    HTTP 认证 API 密钥（或设置 DESKTOP_TOUCH_API_KEY 环境变量）
+  -h, --help      显示此帮助信息
+
+HTTP 模式认证：
+  绑定到 0.0.0.0 时 API 密钥为必填项。
+  通过 --key 参数或 DESKTOP_TOUCH_API_KEY 环境变量设置。
+  客户端请求头: Authorization: Bearer <密钥>
+
+传输模式:
+  stdio  — 命令行/MCP 宿主直连集成（Claude Code、Cursor 等）
+  http   — 远程/局域网访问；配合 API 密钥确保安全
+`);
+    process.exit(0);
   }
 
   const releaseDir = await ensureRelease();
   launchServer(releaseDir);
 }
+
+// ── Auto-run when invoked as script ──────────────────────────────────────────
 
 const launchedAsScript = (() => {
   const entry = process.argv[1];
