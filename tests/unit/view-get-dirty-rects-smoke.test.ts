@@ -24,7 +24,9 @@
 
 import { describe, it, expect } from "vitest";
 
-describe("viewGetDirtyRects (G2-4 smoke)", () => {
+const describeNativeAddon = process.platform === "win32" ? describe : describe.skip;
+
+describeNativeAddon("viewGetDirtyRects (G2-4 smoke)", () => {
   it("returns a NativeDirtyRectsResult shape with monitor_index echoed", async () => {
     // Dynamic import: the addon is loaded lazily so a missing /
     // unbuilt `index.node` surfaces as a clear failure here rather

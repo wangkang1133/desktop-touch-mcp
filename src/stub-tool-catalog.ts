@@ -1914,12 +1914,12 @@ export const STUB_TOOL_CATALOG: StubToolCatalogEntry[] = [
       "type": "object",
       "properties": {
         "command": {
-          "description": "Executable name or full path (e.g. 'notepad.exe', 'calc.exe'). Shell interpreters (cmd.exe, powershell.exe, etc.) are blocked.",
+          "description": "Executable name or full path (e.g. 'notepad.exe', 'calc.exe', 'cmd.exe', 'powershell').",
           "type": "string",
           "maxLength": 260
         },
         "args": {
-          "description": "Command-line arguments (max 20). Shell metacharacters (; & | ` $() ${}) are not allowed.",
+          "description": "Command-line arguments (max 20).",
           "type": "array",
           "default": [],
           "maxItems": 20

@@ -57,7 +57,7 @@ afterEach(() => {
 class StubSubscription implements SubscriptionLike {
   isDisposed = false;
   readonly disposeMock = vi.fn();
-  // eslint-disable-next-line @typescript-eslint/require-await
+
   async next(_timeoutMs: number): Promise<Array<{ x: number; y: number; width: number; height: number }>> {
     return [];
   }

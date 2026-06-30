@@ -48,7 +48,7 @@ describe("browser_click registration schema — exactly-one-of(selector | by+pat
   it("survives the refine as a ZodObject so the SDK emits tools/list properties", () => {
     // The MCP SDK's normalizeObjectSchema returns the schema only when
     // _zod.def.type === 'object' (or def.shape present). A refined object keeps both.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const def = (browserClickRegistrationSchema as any)._zod?.def;
     expect(def?.type).toBe("object");
     const shape = def?.shape ?? {};
@@ -80,7 +80,7 @@ describe("browser_fill registration schema — exactly-one-of(selector | by+patt
   });
 
   it("survives the refine as a ZodObject with all by-axis + value properties", () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const def = (browserFillRegistrationSchema as any)._zod?.def;
     expect(def?.type).toBe("object");
     const shape = def?.shape ?? {};

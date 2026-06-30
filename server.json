@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.Harusame64/desktop-touch-mcp",
+  "name": "io.github.wangkang1133/desktop-touch-mcp",
   "description": "Windows 10/11 专用 computer-use MCP 服务器：31 个工具 — 截图、UIA、Chrome CDP、键鼠输入、VBA 宏。",
   "repository": {
-    "url": "https://github.com/Harusame64/desktop-touch-mcp",
+    "url": "https://github.com/wangkang1133/desktop-touch-mcp",
     "source": "github"
   },
   "version": "1.11.2",

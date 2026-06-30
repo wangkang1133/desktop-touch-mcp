@@ -1,7 +1,7 @@
 {
   "name": "@harusame64/desktop-touch-mcp",
   "version": "1.11.2",
-  "mcpName": "io.github.Harusame64/desktop-touch-mcp",
+  "mcpName": "io.github.wangkang1133/desktop-touch-mcp",
   "description": "Let Claude, Cursor, or any MCP client see and operate your Windows 10/11 desktop. 31 tools for screenshots, UI Automation, Chrome CDP, keyboard/mouse, terminal, with semantic discover-then-act targeting and per-action perception guards that avoid wrong-window typing and stale-coordinate clicks.",
   "keywords": [
     "mcp",
@@ -39,11 +39,9 @@
   },
   "files": [
     "bin/launcher.js",
-    "install.js",
     "start.bat",
     "LICENSE",
-    "README.md",
-    "README.ja.md"
+    "README.md"
   ],
   "publishConfig": {
     "access": "public"
@@ -62,12 +60,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Harusame64/desktop-touch-mcp.git"
+    "url": "git+https://github.com/wangkang1133/desktop-touch-mcp.git"
   },
   "bugs": {
-    "url": "https://github.com/Harusame64/desktop-touch-mcp/issues"
+    "url": "https://github.com/wangkang1133/desktop-touch-mcp/issues"
   },
-  "homepage": "https://github.com/Harusame64/desktop-touch-mcp#readme",
+  "homepage": "https://github.com/wangkang1133/desktop-touch-mcp#readme",
   "license": "MIT",
   "scripts": {
     "build": "tsc",

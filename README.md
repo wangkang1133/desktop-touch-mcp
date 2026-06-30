@@ -10,7 +10,7 @@
 
 ### 方式 A：下载 zip（推荐）
 
-1. 从 [Releases](https://github.com/Harusame64/desktop-touch-mcp/releases) 下载 zip
+1. 从 [Releases](https://github.com/wangkang1133/desktop-touch-mcp/releases) 下载 zip
 2. 解压到任意文件夹
 3. **双击 `start.bat`** — 完事
 

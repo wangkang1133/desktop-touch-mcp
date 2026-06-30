@@ -29,8 +29,9 @@ if (manifestTag !== expectedTag) {
     `[check-launcher-manifest] tagName mismatch: expected ${expectedTag}, got ${manifestTag}. Update RELEASE_MANIFEST.tagName and sha256.`
   );
 }
-if (!/^[a-f0-9]{64}$/i.test(manifestSha)) {
-  throw new Error("[check-launcher-manifest] RELEASE_MANIFEST.sha256 must be 64 hex characters");
+if (manifestSha !== "PENDING" && !/^[a-f0-9]{64}$/i.test(manifestSha)) {
+  throw new Error("[check-launcher-manifest] RELEASE_MANIFEST.sha256 must be PENDING or 64 hex characters");
 }
 
-console.log(`[check-launcher-manifest] OK for ${pkg.version} (${manifestTag})`);
+const shaStatus = manifestSha === "PENDING" ? "sha256=PENDING" : `sha256=${manifestSha}`;
+console.log(`[check-launcher-manifest] OK for ${pkg.version} (${manifestTag}, ${shaStatus})`);

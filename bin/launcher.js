@@ -13,7 +13,7 @@
  */
 
 import { execFile, spawn } from "node:child_process";
-import { createReadStream, createWriteStream, existsSync, statSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   mkdir,
@@ -32,13 +32,15 @@ import { pipeline } from "node:stream/promises";
 
 // ── Version & release config ──────────────────────────────────────────────────
 
-const PACKAGE_VERSION = "1.11.0";
+const PACKAGE_VERSION = "1.11.2";
 const RELEASE_TAG = `v${PACKAGE_VERSION}`;
-const REPO_API_URL = `https://api.github.com/repos/Harusame64/desktop-touch-mcp/releases/tags/${RELEASE_TAG}`;
+const REPO_OWNER = "wangkang1133";
+const REPO_NAME = "desktop-touch-mcp";
+const REPO_API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/tags/${RELEASE_TAG}`;
 const ASSET_NAME = "desktop-touch-mcp-windows.zip";
 const RELEASE_METADATA_FILE = ".desktop-touch-release.json";
 const RELEASE_MANIFEST = {
-  tagName: "v1.11.0",
+  tagName: "v1.11.2",
   assetName: ASSET_NAME,
   sha256: "PENDING",
 };
@@ -420,7 +422,7 @@ async function main() {
 用法: desktop-touch-mcp [选项]
 
 快速安装（无需 npm/npx）：
-  1. 下载:  curl -LO https://github.com/Harusame64/desktop-touch-mcp/releases/download/${RELEASE_TAG}/desktop-touch-mcp-windows.zip
+  1. 下载:  curl -LO https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${RELEASE_TAG}/desktop-touch-mcp-windows.zip
   2. 解压:   Expand-Archive desktop-touch-mcp-windows.zip -DestinationPath C:\\desktop-touch-mcp
   3. stdio: node C:\\desktop-touch-mcp\\dist\\index.js
   4. HTTP:  node C:\\desktop-touch-mcp\\dist\\index.js --http --port 23847 --key YOUR_KEY

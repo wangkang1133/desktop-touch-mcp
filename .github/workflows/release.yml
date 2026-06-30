@@ -85,10 +85,7 @@ jobs:
             Copy-Item -LiteralPath "assets" -Destination $releaseDir -Recurse
           }
 
-          # 新增：独立安装脚本和 Windows 启动脚本
-          if (Test-Path -LiteralPath "install.js") {
-            Copy-Item -LiteralPath "install.js" -Destination $releaseDir
-          }
+          # Windows 双击启动脚本：zip 解压后直接运行 start.bat。
           if (Test-Path -LiteralPath "start.bat") {
             Copy-Item -LiteralPath "start.bat" -Destination $releaseDir
           }
@@ -199,13 +196,13 @@ jobs:
           body: |
             ## Install
 
-            ```bash
-            npx -y @harusame64/desktop-touch-mcp
+            ```text
+            从本 Release 下载 desktop-touch-mcp-windows.zip，解压后双击 start.bat。
             ```
 
             ## Changes
 
-            See [CHANGELOG.md](https://github.com/Harusame64/desktop-touch-mcp/blob/main/CHANGELOG.md) for the list of changes in this release.
+            See [CHANGELOG.md](https://github.com/wangkang1133/desktop-touch-mcp/blob/main/CHANGELOG.md) for the list of changes in this release.
 
   npm-publish:
     name: Publish to npm (OIDC)
@@ -249,7 +246,7 @@ jobs:
         id: sha
         run: |
           VERSION="${{ steps.tag.outputs.version }}"
-          ZIP_URL="https://github.com/Harusame64/desktop-touch-mcp/releases/download/v${VERSION}/desktop-touch-mcp-windows.zip"
+          ZIP_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/desktop-touch-mcp-windows.zip"
           for i in $(seq 1 30); do
             if curl -fL -o release.zip "$ZIP_URL"; then
               break

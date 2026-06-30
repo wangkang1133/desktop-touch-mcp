@@ -41,7 +41,7 @@ const FLATTENED_TOOLS = [
 
 interface ListedTool {
   name: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   inputSchema?: any;
 }
 
@@ -90,7 +90,7 @@ describe.skipIf(process.platform !== "win32")(
         /* v2 module optional in some envs */
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       const handler = (s.server as any)._requestHandlers.get("tools/list");
       const res = await handler(
         { method: "tools/list", params: {} },

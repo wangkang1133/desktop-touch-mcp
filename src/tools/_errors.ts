@@ -41,10 +41,7 @@ const SUGGESTS: Record<string, string[]> = {
     "Use desktop_act({action:'setValue'}) for text input fields",
     "Use screenshot({region:{x,y,width,height}}) to inspect the element region (after desktop_discover)",
   ],
-  BlockedKeyCombo: [
-    "Use workspace_launch to open applications by name instead",
-    "If you need shell execution, use terminal({action:'send'}) to an existing terminal window",
-  ],
+
   UiaTimeout: [
     "The target app may be unresponsive — wait and retry",
     "Try screenshot(detail='image') as a visual fallback",
@@ -551,9 +548,7 @@ function classify(message: string): { code: string; suggest: string[] } {
   if (m.includes("element is disabled") || m.includes("is disabled") || m === "disabled") {
     return { code: "ElementDisabled", suggest: SUGGESTS.ElementDisabled };
   }
-  if (m.includes("is not allowed because it could open a shell")) {
-    return { code: "BlockedKeyCombo", suggest: SUGGESTS.BlockedKeyCombo };
-  }
+
   if (m.includes("invokepattern") || m.includes("invoke pattern")) {
     return { code: "InvokePatternNotSupported", suggest: SUGGESTS.InvokePatternNotSupported };
   }

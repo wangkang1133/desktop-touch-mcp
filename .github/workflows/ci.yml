@@ -6,14 +6,12 @@ on:
     paths-ignore:
       - 'site/**'
       - 'README.md'
-      - 'README.ja.md'
       - '.github/workflows/pages.yml'
   pull_request:
     branches: [main]
     paths-ignore:
       - 'site/**'
       - 'README.md'
-      - 'README.ja.md'
       - '.github/workflows/pages.yml'
 
 jobs:

@@ -221,12 +221,10 @@ describe("keyboard(action='sequence') — issue #257 contract pins", () => {
     expect(text).toMatch(/"code":\s*"MenuFocusLostMidSequence"/);
   });
 
-  // ── Pin 3: macro pre-validate scans steps[].keys ────────────────────────────
-  // macro.ts pre-loop should iterate params.steps[] and call assertKeyComboSafe
-  // on each .keys before Zod parse. Reproduce that loop logic here (the macro
-  // doesn't expose its pre-validate function; this pin asserts the contract a
-  // future change must keep — see `src/tools/macro.ts` action==='sequence' branch).
-  it("macro-style pre-validate rejects win+r inside a sequence step", () => {
+  // ── Pin 3: 定制版宏预校验不再拦截 Win+* ────────────────────────────
+  // 用户定制版移除了键盘组合黑名单；macro.ts 仍可遍历 steps[].keys 并调用
+  // assertKeyComboSafe，但该函数现在是 no-op，Win+R 等组合必须放行。
+  it("macro-style pre-validate allows win+r inside a sequence step", () => {
     const params = {
       action: "sequence",
       steps: [{ keys: "alt+i" }, { keys: "win+r" }, { keys: "m" }],
@@ -243,7 +241,7 @@ describe("keyboard(action='sequence') — issue #257 contract pins", () => {
           }
         }
       }
-    }).toThrow(/win\+r|shell|allowed/i);
+    }).not.toThrow();
   });
 
   // ── Pin 4: stub-catalog (flat, Phase 2a) still surfaces the sequence steps.items shape ──

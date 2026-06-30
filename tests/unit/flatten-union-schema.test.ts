@@ -60,7 +60,7 @@ function failureOf(result: { content: Array<{ text?: string }> }): {
 
 describe("ADR-018 Phase 2a — flattenUnionToObjectSchema", () => {
   const flat = flattenUnionToObjectSchema(synthUnionWithInclude);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   const js = z.toJSONSchema(flat) as any;
 
   it("produces a flat top-level object — no oneOf/anyOf/allOf at the root", () => {
@@ -93,7 +93,7 @@ describe("ADR-018 Phase 2a — flattenUnionToObjectSchema", () => {
 
   it("mixed-type collision (count) widens to a property-level anyOf", () => {
     expect(js.properties.count.anyOf).toBeDefined();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const types = js.properties.count.anyOf.map((b: any) => b.type).sort();
     expect(types).toEqual(["number", "string"]);
   });

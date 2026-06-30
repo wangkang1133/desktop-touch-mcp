@@ -17,7 +17,7 @@ import { describe, it, expect } from "vitest";
 import { runInnerToolAsResult } from "../../../src/tools/macro.js";
 
 /** A fake TOOL_REGISTRY entry whose handler returns a single text content block. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 function textEntry(text: string): any {
   return { schema: { parse: (x: unknown) => x }, handler: async () => ({ content: [{ type: "text", text }] }) };
 }
@@ -61,7 +61,7 @@ describe("runInnerToolAsResult (ADR-021 Phase 3a adapter)", () => {
   });
 
   it("image blocks are carried in the outcome", async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const entry: any = {
       schema: { parse: (x: unknown) => x },
       handler: async () => ({ content: [{ type: "image", data: "abc", mimeType: "image/png" }] }),
@@ -72,7 +72,7 @@ describe("runInnerToolAsResult (ADR-021 Phase 3a adapter)", () => {
   });
 
   it("resource_link blocks are carried in the outcome (ADR-026 by-ref macro forwarding)", async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const entry: any = {
       schema: { parse: (x: unknown) => x },
       handler: async () => ({
@@ -97,7 +97,7 @@ describe("runInnerToolAsResult (ADR-021 Phase 3a adapter)", () => {
   });
 
   it("ok:true with a trailing image block → success + both carried", async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const entry: any = {
       schema: { parse: (x: unknown) => x },
       handler: async () => ({

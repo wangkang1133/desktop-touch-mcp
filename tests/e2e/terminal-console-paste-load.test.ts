@@ -95,7 +95,7 @@ describe("[bash@wsl-ssh] terminal action=send console-paste — LOAD/STRESS gate
       expect(text, `read-back #${i}`).toContain(marker);
     }
     latencies.sort((a, b) => a - b);
-    // eslint-disable-next-line no-console
+
     console.log(`[L1] N=${N} channel=console_paste:${consolePasteCount}/${N} ` +
       `p50=${pct(latencies, 50)}ms p95=${pct(latencies, 95)}ms p99=${pct(latencies, 99)}ms`);
     expect(consolePasteCount).toBe(N); // every send used the new path (no secret prompt)
@@ -132,7 +132,7 @@ describe("[bash@wsl-ssh] terminal action=send console-paste — LOAD/STRESS gate
     } finally {
       realisticHammer.kill();
     }
-    // eslint-disable-next-line no-console
+
     console.log(`[L2] realistic-250ms-hammer delivered=${delivered}/15`);
     expect(delivered).toBe(15); // 100% at a realistic contention interval
 

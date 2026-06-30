@@ -50,7 +50,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const { mockExecFile, mockExecFileWithCustom } = vi.hoisted(() => {
   // Resolve util.promisify.custom inside the hoisted block so the import
   // happens after vitest's hoisting reorder.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+
   const util = require("node:util") as typeof import("node:util");
   const impl = vi.fn();
   const wrapper = Object.assign(
