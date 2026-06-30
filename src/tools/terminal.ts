@@ -82,7 +82,7 @@ export const terminalSendSchema = {
   pressEnter: coercedBoolean().default(true).describe("Press Enter after typing (default true)."),
   focusFirst: coercedBoolean().default(true).describe("Focus the terminal before sending (default true)."),
   restoreFocus: coercedBoolean().default(true).describe("Restore the previously-focused window after sending (default true)."),
-  preferClipboard: coercedBoolean().default(true).describe("Use clipboard paste (typeViaClipboard) — IME/long-text safe (default true)."),
+  preferClipboard: coercedBoolean().default(false).describe("Use clipboard paste (typeViaClipboard) — long-text safe but may conflict with IME/clipboard managers (default false, WM_CHAR preferred)."),
   pasteKey: z.enum(["auto", "ctrl+v", "ctrl+shift+v"]).default("auto").describe("Paste key combo. 'auto' picks ctrl+shift+v for WSL/bash/mintty/wezterm/alacritty, ctrl+v elsewhere. Only used when preferClipboard=true."),
   forceFocus: coercedBoolean().optional().describe(
     "When true, bypass Windows foreground-stealing protection via AttachThreadInput " +
@@ -1980,7 +1980,7 @@ export const terminalRunHandler = async ({
     pressEnter: true,
     focusFirst: true,
     restoreFocus: false,   // keep focus on terminal for polling
-    preferClipboard: true,
+    preferClipboard: false,
     pasteKey: "auto" as const,
     trackFocus: false,
     settleMs: 100,
