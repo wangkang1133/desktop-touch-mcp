@@ -12,7 +12,7 @@ jobs:
   windows-release:
     name: Build Windows release zip
     runs-on: windows-latest
-    if: github.repository == 'Harusame64/desktop-touch-mcp'
+    if: github.repository_owner == 'wangkang1133' || github.repository == 'Harusame64/desktop-touch-mcp'
 
     steps:
       - uses: actions/checkout@v4
@@ -72,7 +72,6 @@ jobs:
           Copy-Item -LiteralPath "package-lock.json" -Destination $releaseDir
           Copy-Item -LiteralPath "LICENSE" -Destination $releaseDir
           Copy-Item -LiteralPath "README.md" -Destination $releaseDir
-          Copy-Item -LiteralPath "README.ja.md" -Destination $releaseDir
           Copy-Item -LiteralPath "dist" -Destination $releaseDir -Recurse
 
           # Native addon: ESM loader + type defs + compiled .node binary at root.
@@ -84,6 +83,14 @@ jobs:
 
           if (Test-Path -LiteralPath "assets") {
             Copy-Item -LiteralPath "assets" -Destination $releaseDir -Recurse
+          }
+
+          # 新增：独立安装脚本和 Windows 启动脚本
+          if (Test-Path -LiteralPath "install.js") {
+            Copy-Item -LiteralPath "install.js" -Destination $releaseDir
+          }
+          if (Test-Path -LiteralPath "start.bat") {
+            Copy-Item -LiteralPath "start.bat" -Destination $releaseDir
           }
 
           if (Test-Path -LiteralPath "bin") {
