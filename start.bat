@@ -1,21 +1,49 @@
 @echo off
-:: desktop-touch-mcp — 快速启动脚本
-:: 1. 从 https://github.com/Harusame64/desktop-touch-mcp/releases 下载 zip
-:: 2. 解压所有文件到当前文件夹
-:: 3. 双击此 .bat 文件（或运行: start.bat --http --port 23847 --key YOUR_KEY）
+:: desktop-touch-mcp — 一键启动
+:: 解压后双击此文件即可，无需其他操作
 
 setlocal
+title desktop-touch-mcp
 
 :: 检查 Node.js
 where node >nul 2>&1
 if errorlevel 1 (
-    echo [错误] Node.js 未安装或不在 PATH 中。
-    echo 请从 https://nodejs.org/ 下载安装
+    echo.
+    echo  [错误] 未检测到 Node.js
+    echo  请从 https://nodejs.org 下载安装后重试
+    echo.
     pause
     exit /b 1
 )
 
-:: 将所有参数传递给服务器
-node "%~dp0dist\index.js" %*
+:: 首次运行：自动安装依赖
+if not exist "%~dp0node_modules" (
+    echo.
+    echo  [首次运行] 正在安装依赖，请稍候...
+    echo.
+    cd /d "%~dp0"
+    call npm install --omit=dev --no-fund --no-audit 2>nul
+    if errorlevel 1 (
+        echo.
+        echo  [错误] 依赖安装失败，请检查网络连接
+        echo.
+        pause
+        exit /b 1
+    )
+    echo.
+    echo  [完成] 依赖安装成功
+    echo.
+)
+
+:: 启动服务器
+cd /d "%~dp0"
+if "%1"=="" (
+    echo  正在启动 desktop-touch-mcp (stdio 模式)...
+    echo  按 Ctrl+C 停止
+    echo.
+    node dist\index.js
+) else (
+    node dist\index.js %*
+)
 
 endlocal

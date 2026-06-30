@@ -8,46 +8,41 @@
 
 ## 快速开始
 
-```bash
-# 方式 A：下载 zip 包（推荐，无需 npm）
-# 从 https://github.com/Harusame64/desktop-touch-mcp/releases 下载 zip
-# 解压后运行：
-node dist/index.js              # stdio 模式
-node dist/index.js --http --port 23847 --key YOUR_KEY  # HTTP 模式
-start.bat                        # Windows 双击启动
+### 方式 A：下载 zip（推荐）
 
-# 方式 B：npx
+1. 从 [Releases](https://github.com/Harusame64/desktop-touch-mcp/releases) 下载 zip
+2. 解压到任意文件夹
+3. **双击 `start.bat`** — 完事
+
+> `start.bat` 首次运行自动安装依赖，之后直接启动。无需 npm/npx/构建工具。
+
+### 方式 B：npx
+
+```bash
 npx -y @harusame64/desktop-touch-mcp
+```
+
+### HTTP 模式
+
+双击 `start.bat` 时加参数即可开启 HTTP 模式：
+
+```bash
+start.bat --http --port 23847 --key YOUR_KEY
 ```
 
 ### 注册到 Claude CLI
 
+在 `~/.claude.json` 的 `mcpServers` 中添加：
+
 ```json
 {
-  "mcpServers": {
-    "desktop-touch": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["C:/Tools/desktop-touch-mcp/dist/index.js"]
-    }
+  "desktop-touch": {
+    "type": "stdio",
+    "command": "node",
+    "args": ["C:/Tools/desktop-touch-mcp/dist/index.js"]
   }
 }
 ```
-
-### HTTP 模式（远程/局域网）
-
-```bash
-# 仅本机（无需密钥）
-node dist/index.js --http --port 23847 --host 127.0.0.1
-
-# 局域网/远程（API 密钥必填）
-node dist/index.js --http --port 23847 --host 0.0.0.0 --key YOUR_KEY
-
-# 或通过环境变量
-set DESKTOP_TOUCH_API_KEY=YOUR_KEY
-node dist/index.js --http --port 23847
-```
-
 > 默认绑定 `0.0.0.0`。绑定到非 localhost 地址时 **API 密钥为必填**，客户端须带 `Authorization: Bearer <KEY>` 请求头。健康检查：`http://<地址>:<端口>/health`。
 
 ---
