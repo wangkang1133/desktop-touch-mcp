@@ -23,6 +23,7 @@ import {
   TERMINAL_WINDOW_CLASSES,
 } from "../engine/bg-input.js";
 import { resolveBackgroundInputChannel } from "../engine/background-channel-resolver.js";
+import { nativeWin32 } from "../engine/native-engine.js";
 import { detectFocusLoss } from "./_focus.js";
 import { getTextViaTextPattern } from "../engine/uia-bridge.js";
 import { recognizeWindow, ocrWordsToLines, detectOcrLanguage } from "../engine/ocr-bridge.js";
@@ -1385,7 +1386,22 @@ export const terminalSendHandler = async ({
       }
       await typeViaClipboard(input, chosenKey);
     } else {
-      await keyboard.type(input);
+      // 关闭 IME 避免中文输入法候选窗口截获键盘输入
+      let imeWasOpen = false;
+      if (typeof nativeWin32?.win32GetImeOpenStatus === "function" && win.hwnd) {
+        try {
+          imeWasOpen = nativeWin32.win32GetImeOpenStatus(win.hwnd) === true;
+          if (imeWasOpen) nativeWin32.win32SetImeOpenStatus?.(win.hwnd, false);
+        } catch { /* best-effort */ }
+      }
+      try {
+        await keyboard.type(input);
+      } finally {
+        // 恢复 IME 原状态
+        if (imeWasOpen && typeof nativeWin32?.win32SetImeOpenStatus === "function" && win.hwnd) {
+          try { nativeWin32.win32SetImeOpenStatus?.(win.hwnd, true); } catch { /* best-effort */ }
+        }
+      }
     }
 
     if (pressEnter) {
