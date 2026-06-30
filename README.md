@@ -2,8 +2,6 @@
 
 [![desktop-touch-mcp MCP server](https://glama.ai/mcp/servers/Harusame64/desktop-touch-mcp/badges/card.svg)](https://glama.ai/mcp/servers/Harusame64/desktop-touch-mcp)
 
-[日本語](README.ja.md)
-
 > **Windows 10/11 专用 Computer-use MCP 服务器。** 让 Claude、Cursor 或任何 MCP 客户端查看并操作你的 Windows 桌面——截图、UI Automation、Chrome CDP、键盘/鼠标、终端——采用**语义化"发现-操作"设计**避免像素坐标猜测，配备**每次操作的感知防护**在误输入到错误窗口前及时拦截。
 
 ```bash
