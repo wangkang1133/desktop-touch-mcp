@@ -18,6 +18,7 @@ const launcherVersion = packageVersionMatch[1];
 const manifestTag = manifestTagMatch[1];
 const manifestSha = manifestShaMatch[1];
 const expectedTag = `v${pkg.version}`;
+const allowPending = process.argv.includes("--allow-pending");
 
 if (launcherVersion !== pkg.version) {
   throw new Error(
@@ -28,6 +29,9 @@ if (manifestTag !== expectedTag) {
   throw new Error(
     `[check-launcher-manifest] tagName mismatch: expected ${expectedTag}, got ${manifestTag}. Update RELEASE_MANIFEST.tagName and sha256.`
   );
+}
+if (manifestSha === "PENDING" && !allowPending) {
+  throw new Error("[check-launcher-manifest] RELEASE_MANIFEST.sha256 is PENDING. Run update-sha before publishing, or pass --allow-pending for local dev checks.");
 }
 if (manifestSha !== "PENDING" && !/^[a-f0-9]{64}$/i.test(manifestSha)) {
   throw new Error("[check-launcher-manifest] RELEASE_MANIFEST.sha256 must be PENDING or 64 hex characters");

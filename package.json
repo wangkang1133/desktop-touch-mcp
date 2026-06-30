@@ -33,13 +33,12 @@
     "node": ">=20.0.0"
   },
   "type": "module",
-  "main": "dist/index.js",
+  "main": "bin/launcher.js",
   "bin": {
     "desktop-touch-mcp": "bin/launcher.js"
   },
   "files": [
     "bin/launcher.js",
-    "start.bat",
     "LICENSE",
     "README.md"
   ],
@@ -71,6 +70,7 @@
     "build": "tsc",
     "sync-version": "node scripts/sync-version.mjs",
     "check:launcher-manifest": "node scripts/check-launcher-manifest.mjs",
+    "check:launcher-manifest:dev": "node scripts/check-launcher-manifest.mjs --allow-pending",
     "update-sha": "node scripts/update-sha.mjs",
     "version": "npm run sync-version && git add src/version.ts bin/launcher.js",
     "prepare": "node scripts/install-hooks.mjs && tsc",
